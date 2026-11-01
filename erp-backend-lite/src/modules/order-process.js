@@ -23,6 +23,7 @@ import { Router } from 'express';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { db } from '../db/index.js';
 import { ok } from '../utils/response.js';
+import { logOrderAction } from '../utils/order-log.js';
 import logger from '../middleware/log.js';
 import config from '../config/index.js';
 import { orderPackageDao } from '../db/dao/sqlite/order-daos.js';
@@ -1447,6 +1448,70 @@ router.post('/admin/api/order-process/sync-package', async (req, res, next) => {
   }
 });
 
+// ── 订单操作日志(2026-11)────────────────────────────────────
+// GET  /admin/api/order-process/logs    按订单查询操作日志(时间倒序,供详情页时间线/排查)
+// POST /admin/api/order-process/logs    写入日志(安卓扫描入库上报客户端事件用)
+// 业务接口自身的日志在各路由内埋点(logOrderAction);此 POST 主要供安卓端上报扫码链路事件。
+router.get('/admin/api/order-process/logs', (req, res, next) => {
+  try {
+    const q = req.query || {};
+    const where = [];
+    const params = [];
+    const push = (cond, val) => {
+      if (val != null && val !== '') {
+        where.push(cond);
+        params.push(val);
+      }
+    };
+    const pkgId = q.packageId != null && q.packageId !== '' ? Number(q.packageId) : NaN;
+    push('package_id = ?', Number.isInteger(pkgId) && pkgId > 0 ? pkgId : null);
+    push('posting_number = ?', q.postingNumber);
+    push('store_id = ?', q.storeId);
+    push('action = ?', q.action);
+    push('result = ?', q.result);
+    push('source = ?', q.source);
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const page = Math.max(1, Number(q.page) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number(q.pageSize) || 50));
+    const total = db.prepare(`SELECT COUNT(*) AS n FROM op_order_log ${whereSql}`).get(...params).n;
+    const list = db.prepare(
+      `SELECT id, package_id AS packageId, posting_number AS postingNumber, store_id AS storeId,
+              action, action_name AS actionName, result, message, detail, source, operator, ip, created_at AS createdAt
+         FROM op_order_log ${whereSql}
+        ORDER BY id DESC LIMIT ? OFFSET ?`
+    ).all(...params, pageSize, (page - 1) * pageSize);
+    res.json(ok({ list, total, page, pageSize }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.post('/admin/api/order-process/logs', (req, res, next) => {
+  try {
+    const b = req.body || {};
+    const action = String(b.action || '').trim();
+    if (!action) {
+      return res.status(400).json({ ok: false, message: 'action 必填' });
+    }
+    logOrderAction({
+      packageId: b.packageId,
+      postingNumber: b.postingNumber,
+      storeId: b.storeId,
+      action,
+      actionName: b.actionName,
+      result: b.result,
+      message: b.message,
+      detail: b.detail,
+      source: ['web', 'android', 'system'].includes(b.source) ? b.source : 'android',
+      operator: req.user?.phone || 'system',
+      ip: req.ip || req.socket?.remoteAddress || null,
+    });
+    res.json(ok({ logged: true }));
+  } catch (e) {
+    next(e);
+  }
+});
+
 // ── 入库(2026-09-15)─────────────────────────────────────────
 // POST body: { packageId: number }
 // 调 Ozon /v4/posting/fbs/ship 搜集订单(不拆分:单 package 含全部商品),UI 名"入库"
@@ -1484,10 +1549,26 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
       )
       .get(packageId);
     if (!row || !row.postingNumber || !row.storeId) {
+      logOrderAction({
+        packageId,
+        action: 'ship',
+        actionName: '入库',
+        result: 'failed',
+        message: `未找到 packageId=${packageId} 对应的订单`,
+        source: 'web',
+      });
       return res.status(404).json({ ok: false, message: `未找到 packageId=${packageId} 对应的订单` });
     }
     // 新流程(2026-11):必须采购后才可入库——仅 wait_stock(待入库)可操作
     if (row.operateStatus !== 'wait_stock') {
+      logOrderAction({
+        packageId, postingNumber: row.postingNumber, storeId: row.storeId,
+        action: 'ship',
+        actionName: '入库',
+        result: 'failed',
+        message: `订单状态 ${row.operateStatus} 不可入库(仅「待入库」状态可入库)`,
+        source: 'web',
+      });
       return res.status(400).json({
         ok: false,
         message: `订单状态 ${row.operateStatus} 不可入库(仅「待入库」状态可入库,请先提交采购信息)`,
@@ -1495,6 +1576,14 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
     }
     const store = (config.loadStores() || []).find((s) => s.id === row.storeId);
     if (!store || !store?.sync_credentials?.clientId) {
+      logOrderAction({
+        packageId, postingNumber: row.postingNumber, storeId: row.storeId,
+        action: 'ship',
+        actionName: '入库',
+        result: 'failed',
+        message: `店铺 ${row.storeId} 未配置 sync_credentials`,
+        source: 'web',
+      });
       return res.status(400).json({ ok: false, message: `店铺 ${row.storeId} 未配置 sync_credentials,无法直连 Ozon` });
     }
 
@@ -1506,9 +1595,27 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
     if (ozonStatus === 'awaiting_registration' || ozonStatus === 'awaiting_deliver') {
       orderPackageDao.syncPosting(store.id, p1); // 顺带校准本地状态
       markStocked(packageId); // 本地推进:待入库 → 待打单
+      logOrderAction({
+        packageId, postingNumber: row.postingNumber, storeId: row.storeId,
+        action: 'ship',
+        actionName: '入库',
+        result: 'success',
+        message: `Ozon 已是 ${ozonStatus} 状态,按已入库幂等处理`,
+        detail: { ozonStatus, substatus: p1?.substatus || null },
+        source: 'web',
+      });
       return res.json(ok({ alreadyShipped: true, ozonStatus, substatus: p1?.substatus || null }));
     }
     if (ozonStatus !== 'awaiting_packaging') {
+      logOrderAction({
+        packageId, postingNumber: row.postingNumber, storeId: row.storeId,
+        action: 'ship',
+        actionName: '入库',
+        result: 'failed',
+        message: ozonStatus === 'cancelled' ? 'Ozon 订单已取消,不能入库' : `Ozon 当前状态 ${ozonStatus || '(未知)'} 不可入库`,
+        detail: { ozonStatus },
+        source: 'web',
+      });
       return res.status(400).json({
         ok: false,
         message:
@@ -1523,6 +1630,14 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
       .map((x) => ({ product_id: x.sku ? Number(x.sku) : null, quantity: Number(x.quantity) || 1 }))
       .filter((x) => x.product_id);
     if (!products.length) {
+      logOrderAction({
+        packageId, postingNumber: row.postingNumber, storeId: row.storeId,
+        action: 'ship',
+        actionName: '入库',
+        result: 'failed',
+        message: '订单商品清单为空(缺少 sku),无法入库',
+        source: 'web',
+      });
       return res.status(400).json({ ok: false, message: '订单商品清单为空(缺少 sku),无法入库' });
     }
 
@@ -1542,6 +1657,15 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
       const pNow = reGet?.result;
       const stNow = pNow?.status || '';
       if (stNow === 'cancelled' || stNow === 'not_accepted') {
+        logOrderAction({
+          packageId, postingNumber: row.postingNumber, storeId: row.storeId,
+          action: 'ship',
+          actionName: '入库',
+          result: 'failed',
+          message: 'Ozon 订单已取消,不能入库(HAS_INCORRECT_STATUS 竞态)',
+          detail: { ozonStatus: stNow },
+          source: 'web',
+        });
         return res.status(400).json({ ok: false, message: 'Ozon 订单已取消,不能入库' });
       }
       if (['awaiting_registration', 'awaiting_deliver', 'delivering', 'driver_pickup', 'delivered'].includes(stNow)) {
@@ -1551,8 +1675,26 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
           { packageId, postingNumber: row.postingNumber, status: stNow, substatus: pNow?.substatus || null },
           '[order-process] 入库竞态已入库(HAS_INCORRECT_STATUS),幂等返回'
         );
+        logOrderAction({
+          packageId, postingNumber: row.postingNumber, storeId: row.storeId,
+          action: 'ship',
+          actionName: '入库',
+          result: 'success',
+          message: '入库竞态已入库(HAS_INCORRECT_STATUS),按已入库幂等返回',
+          detail: { ozonStatus: stNow, substatus: pNow?.substatus || null },
+          source: 'web',
+        });
         return res.json(ok({ alreadyShipped: true, ozonStatus: stNow, substatus: pNow?.substatus || null }));
       }
+      logOrderAction({
+        packageId, postingNumber: row.postingNumber, storeId: row.storeId,
+        action: 'ship',
+        actionName: '入库',
+        result: 'failed',
+        message: `Ozon 当前状态 ${stNow || '(未知)'} 不可入库(HAS_INCORRECT_STATUS)`,
+        detail: { ozonStatus: stNow },
+        source: 'web',
+      });
       return res.status(400).json({
         ok: false,
         message: `Ozon 当前状态 ${stNow || '(未知)'} 不可入库(入库仅限待入库状态),请刷新后重试`,
@@ -1575,6 +1717,15 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
     }
     if (newSub === 'ship_failed') {
       logger.warn({ packageId, postingNumber: row.postingNumber, newStatus, newSub }, '[order-process] 入库失败(ship_failed)');
+      logOrderAction({
+        packageId, postingNumber: row.postingNumber, storeId: row.storeId,
+        action: 'ship',
+        actionName: '入库',
+        result: 'failed',
+        message: '入库失败:Ozon 返回 ship_failed',
+        detail: { newStatus, newSub },
+        source: 'web',
+      });
       return res.status(502).json({
         ok: false,
         message: `入库失败:Ozon 返回 ship_failed,请检查商品清单(SKU/数量)或稍后重试`,
@@ -1584,6 +1735,15 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
       // 指令已受理但 Ozon 状态尚未变更(异步延迟):不再误报失败,返回软成功;
       // 本地状态不动,由订单同步(fast 轮/手动同步)自动校准
       logger.warn({ packageId, postingNumber: row.postingNumber }, '[order-process] 入库指令已提交,Ozon 状态变更中');
+      logOrderAction({
+        packageId, postingNumber: row.postingNumber, storeId: row.storeId,
+        action: 'ship',
+        actionName: '入库',
+        result: 'pending',
+        message: '入库指令已提交,Ozon 状态变更中',
+        detail: { newStatus, newSub },
+        source: 'web',
+      });
       return res.json(ok({ pending: true, ozonStatus: newStatus, substatus: newSub || null }));
     }
 
@@ -1591,6 +1751,15 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
     orderPackageDao.syncPosting(store.id, p2);
     markStocked(packageId);
     logger.info({ packageId, postingNumber: row.postingNumber, newStatus, newSub }, '[order-process] 入库成功');
+    logOrderAction({
+      packageId, postingNumber: row.postingNumber, storeId: row.storeId,
+      action: 'ship',
+      actionName: '入库',
+      result: 'success',
+      message: '入库成功',
+      detail: { newStatus, newSub },
+      source: 'web',
+    });
     // 6) 入库飞书通知(2026-09-22):入库动作本地直发,不再依赖 Ozon STATE_CHANGED 推送——
     //    webhook 停推期间 71 单入库通知丢失的教训;2026-10-16 去重重构后,
     //    原子 claim/release 已收敛到 notifyPostingEvent 内部,与 webhook/轮询兜底共用
@@ -1608,6 +1777,16 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
     const msg = e?.message || String(e);
     const status = /必填|必须为|未配置|不能|不可|尚未/.test(msg) ? 400 : 502;
     logger.warn({ err: msg, packageId: req.body?.packageId }, '[order-process] 入库失败');
+    logOrderAction({
+      packageId: req.body?.packageId,
+      postingNumber: row?.postingNumber,
+      storeId: row?.storeId,
+      action: 'ship',
+      actionName: '入库',
+      result: 'failed',
+      message: `Ozon 入库失败:${msg}`,
+      source: 'web',
+    });
     res.status(status).json({ ok: false, message: `Ozon 入库失败:${msg}` });
   }
 });

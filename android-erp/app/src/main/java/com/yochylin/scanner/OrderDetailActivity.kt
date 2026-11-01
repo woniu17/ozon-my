@@ -39,6 +39,7 @@ import com.yochylin.scanner.adapter.fmtTimeWithWeekday
 import com.yochylin.scanner.adapter.hoursSince
 import com.yochylin.scanner.adapter.parseIsoTime
 import com.yochylin.scanner.adapter.platformLabel
+import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.yochylin.scanner.api.Api
 import com.yochylin.scanner.api.ApiException
@@ -94,6 +95,9 @@ class OrderDetailActivity : ComponentActivity() {
     private lateinit var dTraceTitle: TextView
     private lateinit var dTraceContainer: LinearLayout
     private lateinit var dTraceToggle: TextView
+    private lateinit var dOpLogCard: LinearLayout
+    private lateinit var dOpLogTitle: TextView
+    private lateinit var dOpLogContainer: LinearLayout
     private lateinit var dActionBar: LinearLayout
 
     private var infoOpen = false
@@ -145,6 +149,9 @@ class OrderDetailActivity : ComponentActivity() {
         dTraceTitle = findViewById(R.id.dTraceTitle)
         dTraceContainer = findViewById(R.id.dTraceContainer)
         dTraceToggle = findViewById(R.id.dTraceToggle)
+        dOpLogCard = findViewById(R.id.dOpLogCard)
+        dOpLogTitle = findViewById(R.id.dOpLogTitle)
+        dOpLogContainer = findViewById(R.id.dOpLogContainer)
         dActionBar = findViewById(R.id.dActionBar)
 
         packageId = intent.getStringExtra("packageId") ?: ""
@@ -189,6 +196,7 @@ class OrderDetailActivity : ComponentActivity() {
                 loadStocks() // 库存独立接口,异步加载不阻塞详情
                 loadPriceWatchSnapshots() // 订单跟卖快照异步加载,不阻塞详情
                 loadPurchaseHistory() // 最近采购参考(2026-10-28),未采购订单展示同商品历史采购单
+                loadOpLogs() // 订单操作记录时间线(2026-11),异步加载不阻塞详情
             } catch (e: Exception) {
                 if (e is ApiException && e.code == 401) {
                     toast("登录已过期,请重新登录")
@@ -1231,6 +1239,97 @@ class OrderDetailActivity : ComponentActivity() {
             textSize = 10f
         }
         right.addView(spec)
+        row.addView(right)
+        return row
+    }
+
+    // ── 操作记录时间线(2026-11):按订单展示 op_order_log,排查入库/打单/发运等全链路 ──
+    private suspend fun loadOpLogs() {
+        try {
+            val data = Api.get("/admin/api/order-process/logs", mapOf("packageId" to packageId, "pageSize" to 50))
+            if (!data.isJsonObject) return
+            val list = data.asJsonObject.getAsJsonArray("list") ?: return
+            renderOpLogs(list)
+        } catch (e: Exception) {
+            // 操作记录加载失败静默,不影响订单详情主流程
+        }
+    }
+
+    private fun renderOpLogs(list: JsonArray) {
+        dOpLogCard.visibility = View.VISIBLE
+        dOpLogTitle.text = "操作记录(${list.size()})"
+        dOpLogContainer.removeAllViews()
+        if (list.size() == 0) {
+            dOpLogContainer.addView(mutedText("暂无操作记录"))
+            return
+        }
+        for (el in list) {
+            if (el.isJsonObject) dOpLogContainer.addView(buildOpLogRow(el.asJsonObject))
+        }
+    }
+
+    /** 单条操作记录行: 时间 + 动作名 + 结果 + 描述,按结果着色 */
+    private fun buildOpLogRow(o: JsonObject): View {
+        val actionName = o.optString("actionName").ifBlank { o.optString("action") }
+        val message = o.optString("message")
+        val result = o.optString("result").ifBlank { "info" }
+        val resultColor = when (result) {
+            "success" -> Color.parseColor("#00b42a")
+            "failed" -> Color.parseColor("#f53f3f")
+            "pending", "warning" -> Color.parseColor("#d97706")
+            else -> Color.parseColor(COLOR_MUTE)
+        }
+        val time = fmtTime(o.optString("createdAt"))
+
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.TOP
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(8) }
+        }
+
+        // 结果圆点
+        row.addView(TextView(this).apply {
+            text = "●"
+            setTextColor(resultColor)
+            textSize = 8f
+            layoutParams = LinearLayout.LayoutParams(dp(14), ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(3) }
+        })
+
+        val right = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+
+        val head = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        head.addView(TextView(this).apply {
+            text = actionName
+            setTextColor(Color.parseColor(COLOR_TEXT))
+            textSize = 11f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        head.addView(TextView(this).apply {
+            text = time
+            setTextColor(Color.parseColor(COLOR_MUTE))
+            textSize = 10f
+        })
+        right.addView(head)
+
+        if (message.isNotBlank()) {
+            right.addView(TextView(this).apply {
+                text = message
+                setTextColor(resultColor)
+                textSize = 10f
+                setMaxLines(3)
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(2) }
+            })
+        }
         row.addView(right)
         return row
     }

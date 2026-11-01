@@ -312,6 +312,33 @@
                     android:padding="4dp"
                     android:visibility="gone" />
             </LinearLayout>
+
+            <!-- 操作记录卡片(2026-11):按订单展示 op_order_log 时间线,方便排查 -->
+            <LinearLayout
+                android:id="@+id/dOpLogCard"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="#ffffff"
+                android:padding="14dp"
+                android:layout_marginBottom="10dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/dOpLogTitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="操作记录"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:textColor="#4e5969" />
+
+                <LinearLayout
+                    android:id="@+id/dOpLogContainer"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
+            </LinearLayout>
         </LinearLayout>
     </ScrollView>
 

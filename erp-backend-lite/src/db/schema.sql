@@ -1347,3 +1347,30 @@ CREATE TABLE IF NOT EXISTS op_rating_error_posting (
   UNIQUE(store_id, posting_number)
 );
 CREATE INDEX IF NOT EXISTS idx_rating_err_store_error ON op_rating_error_posting(store_id, error_at);
+
+-- ════════════════════════════════════════════════════════════════
+-- 订单操作日志(2026-11,安卓扫描入库排查 + 按订单展示操作时间线)
+-- 与 audit_logs(通用审计)不同:带 package_id/posting_number 索引,按订单聚合展示。
+-- 覆盖:入库/打单/称重/采购/打印/发运/搁置/同步/库存修改等全部订单写操作,
+-- 以及安卓端扫码事件(camera_start/ship_failed 等客户端上下文)。
+-- result: success / failed / pending / warning
+-- source: web / android / system
+-- created_at: UTC ISO(带 Z),安卓端按设备时区转北京时间展示
+CREATE TABLE IF NOT EXISTS op_order_log (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  package_id     INTEGER,                -- op_package.id
+  posting_number TEXT,                   -- 货件号(按单排查主键)
+  store_id       TEXT,
+  action         TEXT NOT NULL,          -- ship / scan_ship_submit / purchase / print_label / ...
+  action_name    TEXT,                   -- 中文名:入库 / 打单 / 称重 / 采购 / ...
+  result         TEXT NOT NULL DEFAULT 'success', -- success / failed / pending / warning
+  message        TEXT,                   -- 可读描述 / 失败原因
+  detail         TEXT,                   -- JSON 详情(请求/响应摘要,截断 2000)
+  source         TEXT NOT NULL DEFAULT 'web',     -- web / android / system
+  operator       TEXT,                   -- 操作人
+  ip             TEXT,
+  created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_op_order_log_pkg     ON op_order_log(package_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_op_order_log_posting ON op_order_log(store_id, posting_number, id DESC);
+CREATE INDEX IF NOT EXISTS idx_op_order_log_created ON op_order_log(created_at DESC);

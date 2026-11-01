@@ -49,6 +49,7 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
 
 /**
@@ -102,6 +103,51 @@ class StockScanFragment : Fragment() {
 
     private val records = mutableListOf<RecordEntry>()
 
+    // ── 扫描日志上报(2026-11):扫码链路事件异步上报后端 op_order_log,方便排查 ──
+    // 仅服务器侧落库;网络失败时进内存队列,下次触发补报(上限 100),不阻塞扫码主流程。
+    private val pendingLogs = ConcurrentLinkedQueue<Map<String, Any?>>()
+
+    private fun reportLog(
+        action: String,
+        message: String,
+        code: String = "",
+        packageId: String = "",
+        postingNumber: String? = null,
+        result: String = "info",
+        extra: Map<String, Any?>? = null
+    ) {
+        val detail = HashMap<String, Any?>()
+        if (code.isNotBlank()) detail["code"] = code
+        if (extra != null) detail.putAll(extra)
+        pendingLogs.add(buildMap<String, Any?> {
+            put("action", action)
+            put("message", message)
+            put("result", result)
+            put("source", "android")
+            if (packageId.isNotBlank()) put("packageId", packageId)
+            if (!postingNumber.isNullOrBlank()) put("postingNumber", postingNumber)
+            if (detail.isNotEmpty()) put("detail", detail)
+        })
+        flushPendingLogs()
+    }
+
+    /** 逐个上报队列中的日志;失败则停止本轮,剩余留待下次触发(上限 100 防内存膨胀) */
+    private fun flushPendingLogs() {
+        if (pendingLogs.isEmpty() || !isAdded) return
+        lifecycleScope.launch {
+            while (pendingLogs.isNotEmpty()) {
+                val entry = pendingLogs.peek() ?: break
+                try {
+                    Api.post("/admin/api/order-process/logs", entry)
+                    pendingLogs.poll()
+                } catch (e: Exception) {
+                    while (pendingLogs.size > 100) pendingLogs.poll()
+                    break
+                }
+            }
+        }
+    }
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private var hintHideRunnable: Runnable? = null
 
@@ -117,6 +163,7 @@ class StockScanFragment : Fragment() {
                 pauseBtn.setTextColor(0xFF165DFF.toInt())
                 pauseBtn.setRoundedBg(0xFFE8F3FF.toInt(), 8f)
                 addRecord(RecordEntry(RecordStatus.FAILED, "", message = "未获得相机权限,无法扫码入库"))
+                reportLog("camera_permission_denied", "未获得相机权限,无法扫码入库", result = "failed")
             }
         }
 
@@ -199,9 +246,11 @@ class StockScanFragment : Fragment() {
                 startOverlay.visibility = View.GONE
                 // 暂停后恢复扫描时,保持用户之前的闪光灯设置
                 if (torchOn) runCatching { camera?.cameraControl?.enableTorch(true) }
+                reportLog("camera_start", "相机已启动,开始连扫")
             }, ContextCompat.getMainExecutor(requireContext()))
         } catch (e: Throwable) {
             addRecord(RecordEntry(RecordStatus.FAILED, "", message = "相机启动失败:${e.message ?: e.javaClass.simpleName}"))
+            reportLog("camera_failed", "相机启动失败:${e.message ?: e.javaClass.simpleName}", result = "failed")
             // 启动失败恢复为默认关闭状态
             paused = true
             startOverlay.visibility = View.VISIBLE
@@ -229,6 +278,7 @@ class StockScanFragment : Fragment() {
                                     lastHandleAt[raw] = now
                                     pruneDebounce()
                                     if (!paused && !dialogShowing) {
+                                        reportLog("scan_received", "识别到条码", code = raw)
                                         handleCode(raw)
                                     }
                                 }
@@ -263,8 +313,10 @@ class StockScanFragment : Fragment() {
         if (!COURIER_NO_REGEX.matches(code)) {
             showScanHint("❌ 非快递单号:$code", error = true)
             playFeedback(false)
+            reportLog("scan_invalid_format", "非快递单号,不处理", code = code, result = "warning")
             return
         }
+        reportLog("scan_search_start", "全局搜索订单", code = code)
         viewLifecycleOwner.lifecycleScope.launch {
             try {
                 val data = Api.get(
@@ -286,6 +338,7 @@ class StockScanFragment : Fragment() {
                     if (resp.packages.isEmpty()) {
                         showScanHint("❌ 未找到订单:$code", error = true)
                         playFeedback(false)
+                        reportLog("scan_not_found", "未找到订单", code = code, result = "failed")
                     } else {
                         // 找到订单但不在待入库状态:明确提示原因(而非笼统"无待入库订单")。
                         // 例如已入库(Ozon awaiting_registration/awaiting_deliver 等)提示"已入库",
@@ -300,10 +353,20 @@ class StockScanFragment : Fragment() {
                         if (status in shippedStates) {
                             showScanHint("✅ 该订单已入库:${pn.ifBlank { code }}", error = false)
                             playFeedback(true)
+                            reportLog(
+                                "scan_status_skipped", "该订单已入库,不重复入库",
+                                code = code, postingNumber = pn.ifBlank { null },
+                                result = "warning", extra = mapOf("status" to status)
+                            )
                         } else {
                             showScanHint(
                                 "⏭ 订单状态[${status.ifBlank { "未知" }}]不可入库:${pn.ifBlank { code }}",
                                 error = false
+                            )
+                            reportLog(
+                                "scan_status_skipped", "订单状态 ${status.ifBlank { "未知" }} 不可入库",
+                                code = code, postingNumber = pn.ifBlank { null },
+                                result = "warning", extra = mapOf("status" to status)
                             )
                         }
                     }
@@ -321,6 +384,7 @@ class StockScanFragment : Fragment() {
                 failCount++
                 addRecord(RecordEntry(RecordStatus.FAILED, code, message = "查询失败:${e.message ?: e.javaClass.simpleName}"))
                 playFeedback(false)
+                reportLog("scan_search_failed", "查询失败:${e.message ?: e.javaClass.simpleName}", code = code, result = "failed")
                 updateStats()
             }
         }
@@ -346,6 +410,11 @@ class StockScanFragment : Fragment() {
         dialogShowing = true
         updateStats()
         addRecord(RecordEntry(RecordStatus.PENDING, code, pkg.id, pkg.postingNumber, "共 $totalQty 件,待确认", imageUrl))
+        reportLog(
+            "multi_confirm_show", "多件商品弹窗二次确认",
+            code = code, packageId = pkg.id, postingNumber = pkg.postingNumber,
+            result = "pending", extra = mapOf("totalQty" to totalQty)
+        )
 
         val itemsText = pkg.items
             ?.joinToString("\n") { it ->
@@ -362,10 +431,12 @@ class StockScanFragment : Fragment() {
             append("\n\n将向 Ozon 确认全部商品为一个货件(不拆分)。")
         }
 
+        var confirmed = false
         val dialog = AlertDialog.Builder(requireContext())
             .setTitle("入库确认")
             .setMessage(message)
             .setPositiveButton("确认入库") { _, _ ->
+                confirmed = true
                 doShip(pkg.id, pkg.postingNumber, code, imageUrl)
             }
             .setNegativeButton("取消", null)
@@ -373,6 +444,13 @@ class StockScanFragment : Fragment() {
         dialog.setOnDismissListener {
             dialogShowing = false
             pendingCount = (pendingCount - 1).coerceAtLeast(0)
+            if (!confirmed) {
+                reportLog(
+                    "multi_confirm_cancel", "用户取消多件入库确认",
+                    code = code, packageId = pkg.id, postingNumber = pkg.postingNumber,
+                    result = "warning"
+                )
+            }
             updateStats()
         }
         dialog.show()
@@ -380,6 +458,7 @@ class StockScanFragment : Fragment() {
 
     /** 调用入库接口并记录结果 */
     private fun doShip(packageId: String, postingNumber: String?, code: String, imageUrl: String? = null) {
+        reportLog("ship_submit", "提交入库", code = code, packageId = packageId, postingNumber = postingNumber, result = "pending")
         viewLifecycleOwner.lifecycleScope.launch {
             try {
                 val r = Api.post("/admin/api/order-process/ship", mapOf("packageId" to packageId)).asJsonObject
@@ -394,12 +473,18 @@ class StockScanFragment : Fragment() {
                         successCount++
                         addRecord(RecordEntry(RecordStatus.SUCCESS, code, packageId, postingNumber, "已入库过", imageUrl))
                         playFeedback(true)
+                        reportLog("ship_already", "该订单已入库过", code = code, packageId = packageId, postingNumber = postingNumber, result = "warning")
                     }
                 } else {
                     val title = if (r.optBoolean("pending")) "入库指令已提交" else "入库成功"
                     successCount++
                     addRecord(RecordEntry(RecordStatus.SUCCESS, code, packageId, postingNumber, title, imageUrl))
                     playFeedback(true)
+                    reportLog(
+                        if (r.optBoolean("pending")) "ship_pending" else "ship_success",
+                        title, code = code, packageId = packageId, postingNumber = postingNumber,
+                        result = if (r.optBoolean("pending")) "pending" else "success"
+                    )
                 }
             } catch (e: Exception) {
                 failCount++
@@ -409,6 +494,7 @@ class StockScanFragment : Fragment() {
                     imageUrl
                 ))
                 playFeedback(false)
+                reportLog("ship_failed", "入库失败:${e.message ?: e.javaClass.simpleName}", code = code, packageId = packageId, postingNumber = postingNumber, result = "failed")
             }
             updateStats()
         }
@@ -427,7 +513,10 @@ class StockScanFragment : Fragment() {
             .setView(input)
             .setPositiveButton("入库") { _, _ ->
                 val code = input.text.toString().trim()
-                if (code.isNotEmpty()) handleCode(code)
+                if (code.isNotEmpty()) {
+                    reportLog("manual_input", "手动输入条码", code = code)
+                    handleCode(code)
+                }
             }
             .setNegativeButton("取消", null)
             .show()
@@ -458,6 +547,7 @@ class StockScanFragment : Fragment() {
             pauseBtn.setTextColor(0xFF165DFF.toInt())
             pauseBtn.setRoundedBg(0xFFE8F3FF.toInt(), 8f)
             startOverlay.visibility = View.VISIBLE
+            reportLog("scan_pause", "暂停扫码")
         }
     }
 
@@ -465,6 +555,7 @@ class StockScanFragment : Fragment() {
     private fun startScanning() {
         if (!paused) return
         paused = false
+        reportLog("scan_resume", "开始扫码")
         pauseBtn.text = "⏸ 暂停"
         pauseBtn.setTextColor(0xFF1D2129.toInt())
         pauseBtn.setRoundedBg(0xFFF2F3F5.toInt(), 8f)
@@ -481,6 +572,7 @@ class StockScanFragment : Fragment() {
         successCount = 0
         pendingCount = 0
         failCount = 0
+        reportLog("records_clear", "清空本次扫描记录")
         updateStats()
     }
 
