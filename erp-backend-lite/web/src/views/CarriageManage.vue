@@ -485,9 +485,13 @@ async function onCreateFromModal() {
     );
     if (cid > 0 && selectedContact && selectedContact.phone.trim() && selectedContact.comment.trim()) {
       try {
+        // 2026-11-06:下单人名称为空时默认店铺名(兑现配置文案承诺;否则 Ozon 侧不存该字段,详情显示"—")
+        const createStoreName = storesStore.list.find(
+          (s) => String(s.id) === String(createModal.storeId)
+        )?.name || '';
         await setCarriageCourierContact(createModal.storeId, cid, {
           phone: selectedContact.phone.trim(),
-          wechatNickname: selectedContact.wechatNickname.trim(),
+          wechatNickname: selectedContact.wechatNickname.trim() || createStoreName,
           comment: selectedContact.comment.trim(),
         });
         contactSaved = true;
@@ -1441,7 +1445,8 @@ defineExpose({ refreshCurrent, listLoading });
                 <span class="contact-view-value">{{ detail.contact[0].phone || '—' }}</span>
                 <span class="contact-view-sep">·</span>
                 <span class="contact-view-label">下单人名称</span>
-                <span class="contact-view-value">{{ detail.contact[0].wechat_nickname || '—' }}</span>
+                <!-- 2026-11-06:Ozon 未存时按兜底链展示(默认配置/店铺名),与编辑表单口径一致 -->
+                <span class="contact-view-value">{{ detail.contact[0].wechat_nickname || detail.wechatNickname || '—' }}</span>
                 <span class="contact-view-sep">·</span>
                 <span class="contact-view-label">取件地址</span>
                 <span class="contact-view-value">{{ detail.contact[0].comment || '—' }}</span>

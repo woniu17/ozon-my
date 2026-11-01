@@ -70,7 +70,6 @@ export function getPendingExportState() {
            OR p.is_ignored = 1
            OR (p.note IS NOT NULL AND p.note != '')
            OR (p.tags IS NOT NULL AND p.tags != '')
-           OR (p.head_logistics_no IS NOT NULL AND p.head_logistics_no != '')
          )`
     )
     .get(lastExportAt || '1970-01-01T00:00:00Z');
@@ -109,7 +108,6 @@ export function exportPurchaseSyncData({ machine } = {}) {
           OR p.is_ignored = 1
           OR (p.note IS NOT NULL AND p.note != '')
           OR (p.tags IS NOT NULL AND p.tags != '')
-          OR (p.head_logistics_no IS NOT NULL AND p.head_logistics_no != '')
        ORDER BY o.posting_number`
     )
     .all();
@@ -479,16 +477,14 @@ function importOnePackage(pkgImp, report) {
       if (itemId != null) touchedItems.add(itemId);
     }
 
-    // 新插入关联后:头程物流补空(取有单号的采购单)
+    // 新插入关联后:头程发货时间补空(2026-11-06 阶段2:单号/公司只存采购单侧,不再写包裹 head_logistics_*)
     if (insertedLinks > 0 && purImp.logisticsNo) {
       db.prepare(
         `UPDATE op_package SET
-            head_logistics_no = COALESCE(head_logistics_no, ?),
-            head_logistics_company = COALESCE(head_logistics_company, ?),
             head_shipped_at = COALESCE(head_shipped_at, ?),
             gmt_modified = ?
          WHERE id = ?`
-      ).run(purImp.logisticsNo, purImp.logisticsCompany || null, purImp.sendAt || nowIso(), nowIso(), pkg.id);
+      ).run(purImp.sendAt || nowIso(), nowIso(), pkg.id);
     }
   }
   if (insertedLinks > 0) {
@@ -496,17 +492,14 @@ function importOnePackage(pkgImp, report) {
     recomputeAggregates(pkg.id, touchedItems);
   }
 
-  // ── 包裹级字段:备注/标签/头程物流(2026-09-23 扩展,本机为空时回填)──
-  // 头程:文件包裹级字段直填;旧版文件(无 headLogistics)由上面"新 link 的采购单"推导兜底
+  // ── 包裹级字段:备注/标签/头程发货时间(2026-09-23 扩展,本机为空时回填)──
+  // 2026-11-06 阶段2:headLogistics.no/company 不再回填包裹(该字段只剩 OGL 单号旧值兜底语义),
+  // 仅保留 shippedAt;旧版文件中的单号/公司字段继续存于采购单侧,随 purchases 合并
   const metaSets = [];
   if (pkgImp.note && !pkg.note) metaSets.push(['note = ?', pkgImp.note]);
   if (pkgImp.tags && !pkg.tags) metaSets.push(['tags = ?', pkgImp.tags]);
   const hlImp = pkgImp.headLogistics || {};
-  if (hlImp.no && !pkg.head_logistics_no) {
-    metaSets.push(['head_logistics_no = ?', hlImp.no]);
-    if (hlImp.company && !pkg.head_logistics_company) metaSets.push(['head_logistics_company = ?', hlImp.company]);
-    if (hlImp.shippedAt && !pkg.head_shipped_at) metaSets.push(['head_shipped_at = ?', hlImp.shippedAt]);
-  }
+  if (hlImp.shippedAt && !pkg.head_shipped_at) metaSets.push(['head_shipped_at = ?', hlImp.shippedAt]);
   if (metaSets.length) {
     db.prepare(`UPDATE op_package SET ${metaSets.map((s) => s[0]).join(', ')}, gmt_modified = ? WHERE id = ?`)
       .run(...metaSets.map((s) => s[1]), nowIso(), pkg.id);
@@ -660,10 +653,7 @@ export function diffPurchaseSyncAgainstDb(data) {
     if (pkg.tags && pkg.tags !== (pkgImp.tags ?? null)) {
       result.fieldMismatches.push(`${pkgImp.postingNumber} 标签: 本机 "${pkg.tags}" vs 文件 "${pkgImp.tags ?? ''}"`);
     }
-    const hlDiff = pkgImp.headLogistics?.no ?? null;
-    if (pkg.head_logistics_no && pkg.head_logistics_no !== hlDiff) {
-      result.fieldMismatches.push(`${pkgImp.postingNumber} 头程单号: 本机 ${pkg.head_logistics_no} vs 文件 ${hlDiff ?? '(无)'}`);
-    }
+    // 2026-11-06 阶段2:头程单号不再比对(包裹 head_logistics_no 已只剩 OGL 旧值兜底语义,不参与同步)
   }
 
   result.safeToWipe = result.missingPackages.length === 0 && result.missingLinks.length === 0;

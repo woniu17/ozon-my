@@ -804,11 +804,9 @@ function buildPackageWhere(filters = {}) {
     const val = globalMode === 'eq' ? globalKw : `%${globalKw}%`;
     // OGL 集运仓快递单号匹配(2026-11-06):单号存发运级 op_carriage_history.tracking_number,
     // 多容器逗号分隔;eq 模式按"成员精确"匹配(首尾补逗号),ss 模式子串匹配。
-    // 旧字段 head_logistics_no 作无发运关联行(发运管理上线前的老包裹)的兜底。
     const oglEq = globalMode === 'eq';
     const oglVal = oglEq ? `%,${globalKw},%` : `%${globalKw}%`;
     const oglOpCh = oglEq ? `(',' || ch.tracking_number || ',') LIKE ?` : 'ch.tracking_number LIKE ?';
-    const oglOpPkg = oglEq ? `(',' || p.head_logistics_no || ',') LIKE ?` : 'p.head_logistics_no LIKE ?';
     where.push(`(
       o.posting_number ${op}
       OR p.package_no ${op}
@@ -827,10 +825,11 @@ function buildPackageWhere(filters = {}) {
                    AND (cp.package_id = p.id
                         OR (cp.store_id = o.store_id AND cp.posting_number = o.posting_number))
                    AND (${oglOpCh}))
-      OR (${oglOpPkg})
     )`);
-    // 9 个占位符:posting_number/package_no/logistics_no/offer_id/sku/purchase_sn/po.logistics_no/OGL单号×2
-    params.push(val, val, val, val, val, val, val, oglVal, oglVal);
+    // 2026-11-06:OGL 单号搜索只走发运级 op_carriage_history,不再兜底读旧字段
+    // op_package.head_logistics_no(与徽标读取解耦);采购物流单号由 po.logistics_no 分支覆盖
+    // 8 个占位符:posting_number/package_no/logistics_no/offer_id/sku/purchase_sn/po.logistics_no/OGL单号
+    params.push(val, val, val, val, val, val, val, oglVal);
   } else {
     const tab = filters.tab || 'waitProcess';
     if (tab === 'ignored') {
@@ -1036,8 +1035,10 @@ const SORT_COLUMNS = {
 // 单号属于发运单(op_carriage_history.tracking_number,多容器时逗号分隔全量),
 // 货件按"当前活跃发运关联"(op_carriage_posting.removed_at IS NULL)取最近一次加入的发运的单号:
 // 后加进发运的货件自动带号、移出的自动失号,不再依赖打标签那一刻的回填时机。
-// 旧字段 op_package.head_logistics_no 仅作 YT 开头值的过渡兜底(发运历史行缺失的长尾);
-// 非 YT 开头的旧值(妙手同步/入库误存的采购物流单号)一律清空,不再当 OGL 号展示(修语义污染)。
+// 2026-11-06:OGL 单号读取与 op_package.head_logistics_no/company 彻底解耦——
+// 不再有包裹级兜底(该列 2026-08-29 创建时语义本是"国内物流(上家→我)"采购头程,
+// 10-30 起被 OGL 打标签回填混写,已停写/清洗);徽标只信发运级 op_carriage_history。
+// 代价:发运已取消但标签已实际使用的极少数在途货件(2 个)无发运历史行,不再显示徽标。
 function attachCarriageOglTracking(pkgRows) {
   if (!pkgRows.length) return;
   const pkgIds = [...new Set(pkgRows.map((p) => p.id).filter(Boolean))];
@@ -1075,13 +1076,8 @@ function attachCarriageOglTracking(pkgRows) {
   }
   for (const p of pkgRows) {
     const tracking = byPid.get(p.id) || byKey.get(`${p.storeId}|${p.postingNumber}`);
-    if (tracking) {
-      p.headLogisticsNo = tracking;
-      p.headLogisticsCompany = '圆通速递';
-    } else if (!/^YT/.test(String(p.headLogisticsNo || ''))) {
-      p.headLogisticsNo = null;
-      p.headLogisticsCompany = null;
-    }
+    p.headLogisticsNo = tracking || null;
+    p.headLogisticsCompany = tracking ? '圆通速递' : null;
   }
 }
 
@@ -1256,8 +1252,8 @@ function rowToPackage(r) {
     tplIntegrationType: r.tpl_integration_type || null,
     warehouse: r.warehouse_name,
     logisticsNo: r.logistics_no,
-    headLogisticsNo: r.head_logistics_no,
-    headLogisticsCompany: r.head_logistics_company,
+    // OGL 单号不再读 op_package.head_logistics_no/company(2026-11-06),
+    // 一律由 attachCarriageOglTracking 从发运级 op_carriage_history 派生
     arrivedAt: r.arrived_at,
     totalPurchaseAmount: r.total_purchase_amount,
     accrualTotal: r.accrual_total != null ? Number(r.accrual_total) : null,
@@ -1880,8 +1876,6 @@ function submitPurchase({
        VALUES (?, ?, ?, ?, ?, ?, ?)`
     );
     const pkgSetSql = `
-        head_logistics_no = COALESCE(?, head_logistics_no),
-        head_logistics_company = COALESCE(?, head_logistics_company),
         head_shipped_at = COALESCE(?, head_shipped_at),
         purchase_status = 'complete',
         operate_status = CASE WHEN operate_status = 'wait_process' THEN 'wait_stock' ELSE operate_status END,
@@ -1903,7 +1897,7 @@ function submitPurchase({
       }
       // 包裹状态更新(total_purchase_amount 由 reallocateAutoLinks 设绝对值,这里不增量)
       db.prepare(`UPDATE op_package SET ${pkgSetSql} WHERE id = ?`)
-        .run(logisticsNo, logisticsCompany, logisticsNo ? sendAt || now : null, now, packageId);
+        .run(logisticsNo ? sendAt || now : null, now, packageId);
       // 重算该采购单所有 auto 关联的分摊金额(含已关联的其他包裹)
       reallocateAutoLinks(poId);
     } else {
@@ -1942,7 +1936,7 @@ function submitPurchase({
         .prepare(`SELECT COALESCE(SUM(allocated_amount),0) AS total FROM op_purchase_link WHERE package_id = ?`)
         .get(packageId);
       db.prepare(`UPDATE op_package SET total_purchase_amount = ?, ${pkgSetSql} WHERE id = ?`)
-        .run(Math.round(aggPkg.total * 100) / 100, logisticsNo, logisticsCompany, logisticsNo ? sendAt || now : null, now, packageId);
+        .run(Math.round(aggPkg.total * 100) / 100, logisticsNo ? sendAt || now : null, now, packageId);
       // 采购单金额跟随用户指定值(手填金额即实际采购成本,覆盖平台标称值;auto 模式提交平台金额仍会覆盖回来)
       if (total > 0) {
         db.prepare(`UPDATE op_purchase_order SET payment_amount = ?, goods_amount = ?, gmt_modified = ? WHERE id = ?`)
@@ -2026,8 +2020,8 @@ function updatePurchaseAlloc({ packageId, items }) {
  *   - logisticsNo 必填,覆盖写入(支持逗号分隔多个,与弹窗导入口径一致)
  *   - logisticsCompany 传了才覆盖(不传保留原值)
  *   - 状态联动:wait_send/wait_pay → shipped(已有终态不动);send_at 首次有单号时补 now
- *   - 包裹聚合:该采购单关联的全部包裹(拼单可多包裹)head_logistics_* 用 COALESCE 补值,
- *     与 submitPurchase 的 pkgSetSql 同款(不覆盖包裹已有头程物流)
+ *   - 包裹聚合:该采购单关联的全部包裹(拼单可多包裹)补 head_shipped_at
+ *     (2026-11-06 阶段2:采购物流单号不再写入包裹 head_logistics_no,该字段只剩 OGL 单号旧值兜底语义)
  */
 function updatePurchaseLogistics({ purchaseOrderId, logisticsNo, logisticsCompany }) {
   const po = db
@@ -2059,12 +2053,10 @@ function updatePurchaseLogistics({ purchaseOrderId, logisticsNo, logisticsCompan
       const ph = pkgIds.map(() => '?').join(',');
       db.prepare(
         `UPDATE op_package SET
-           head_logistics_no = COALESCE(head_logistics_no, ?),
-           head_logistics_company = COALESCE(head_logistics_company, ?),
            head_shipped_at = COALESCE(head_shipped_at, ?),
            gmt_modified = ?
          WHERE id IN (${ph})`
-      ).run(no, company, now, now, ...pkgIds);
+      ).run(now, now, ...pkgIds);
     }
   });
   return { purchaseOrderId: po.id, logisticsNo: no, logisticsCompany: company, packages: pkgIds.length };
@@ -2073,27 +2065,6 @@ function updatePurchaseLogistics({ purchaseOrderId, logisticsNo, logisticsCompan
 /** 取消关联:冲回产品行金额 + 删除 link;采购单无剩余关联时置 unlinked
  *  auto 模式关联被删后,剩余 auto 关联的分摊金额会重新按 quantity 加权计算
  */
-/** 回填包裹的 OGL 国内集运仓快递单号(2026-10-30)
- *  场景:打印 Ozon 货运标签时,PDF 即国内段圆通面单,每页一个 YT 单号;
- *  该单号是供应商发货到 Ozon OGL 国内集运仓的快递单号,回填到 op_package 头程物流字段。
- *  按 store_id + logistics_no(=posting_number)匹配包裹,仅空值写入(不覆盖已录单号)。
- */
-function fillHeadLogisticsByPosting({ storeId, postingNumber, logisticsNo, logisticsCompany }) {
-  const no = String(logisticsNo || '').trim();
-  if (!no) return { updated: 0 };
-  const company = String(logisticsCompany || '').trim() || '圆通速递';
-  const r = db
-    .prepare(
-      `UPDATE op_package SET
-         head_logistics_no = COALESCE(head_logistics_no, ?),
-         head_logistics_company = COALESCE(head_logistics_company, ?),
-         gmt_modified = ?
-       WHERE store_id = ? AND logistics_no = ?`
-    )
-    .run(no, company, nowIso(), storeId, postingNumber);
-  return { updated: Number(r.changes) };
-}
-
 function unlinkPurchase(purchaseOrderId, packageId) {
   const now = nowIso();
   runInTx(() => {
@@ -2198,13 +2169,12 @@ function revertToWaitProcess(packageId) {
       }
     }
     // 3) 包裹回流 + 重置采购聚合
+    //    2026-11-06 阶段2:不再清 head_logistics_no/company(该字段只剩 OGL 单号旧值兜底语义,与采购无关)
     db.prepare(
       `UPDATE op_package SET
         operate_status = 'wait_process',
         purchase_status = 'none',
         total_purchase_amount = 0,
-        head_logistics_no = NULL,
-        head_logistics_company = NULL,
         head_shipped_at = NULL,
         arrived_at = NULL,
         gmt_modified = ?
@@ -2230,15 +2200,14 @@ function clearAllPurchase(packageId) {
       db.prepare(`SELECT 1 AS x FROM op_purchase_link WHERE package_id = ? LIMIT 1`).get(packageId) != null ||
       (Number(pkg.total_purchase_amount) || 0) !== 0 ||
       pkg.purchase_status !== 'none' ||
-      pkg.head_logistics_no != null;
+      pkg.head_shipped_at != null; // 2026-11-06 阶段2:指示器从 head_logistics_no(已属 OGL 语义)换成 head_shipped_at
     const cleared = clearPackagePurchaseInfo(packageId, now);
     // 归零残留聚合(clearPackagePurchaseInfo 无关联时提前返回,这些列不会被清)
+    // 2026-11-06 阶段2:不清 head_logistics_no/company(OGL 单号旧值兜底,与采购无关)
     db.prepare(
       `UPDATE op_package SET
           total_purchase_amount = 0,
           purchase_status = 'none',
-          head_logistics_no = NULL,
-          head_logistics_company = NULL,
           head_shipped_at = NULL,
           gmt_modified = ?
        WHERE id = ?`
@@ -2585,7 +2554,8 @@ function lookupPurchase(platform, purchaseSn) {
  * 语义对齐 revertToWaitProcess 的清除部分,但不回退 operate_status、不触碰 arrived_at/weight/note:
  *   1) 冲回产品行 purchase_amount/purchase_num,删除该包裹全部 op_purchase_link
  *   2) 受影响采购单无剩余关联 → unlinked;仍有 auto 关联 → 按剩余数量重新加权分摊(拼单冲回)
- *   3) 重置包裹采购聚合(total_purchase_amount/头程物流),等待妙手数据重新写入
+ *   3) 重置包裹采购聚合(total_purchase_amount/头程发货时间),等待妙手数据重新写入
+ *      (2026-11-06 阶段2:不清 head_logistics_no/company —— 该字段只剩 OGL 单号旧值兜底语义,与采购无关)
  * @returns 清除的关联行数(0=本地本就无采购信息)
  */
 function clearPackagePurchaseInfo(packageId, now) {
@@ -2612,8 +2582,6 @@ function clearPackagePurchaseInfo(packageId, now) {
   db.prepare(
     `UPDATE op_package SET
         total_purchase_amount = 0,
-        head_logistics_no = NULL,
-        head_logistics_company = NULL,
         head_shipped_at = NULL,
         gmt_modified = ?
      WHERE id = ?`
@@ -2721,12 +2689,11 @@ function syncFromMiaoshou({ packageIds } = {}) {
   );
   // 状态推进:有采购单关联时,把 wait_process → wait_stock(对齐 submitPurchase 的 pkgSetSql)
   // 只前进不回退:CASE WHEN operate_status='wait_process' THEN 'wait_stock' ELSE operate_status END
-  // 头程物流信息(国内快递单号/公司/发货时间)用 COALESCE 覆盖(空值不覆盖本地已有)
+  // 2026-11-06 阶段2:不再把采购物流单号/公司写入包裹 head_logistics_no(该字段只剩 OGL 旧值兜底语义),
+  // 仅保留发货时间 head_shipped_at 的 COALESCE 补值
   const advanceStatus = db.prepare(
     `UPDATE op_package
-       SET head_logistics_no = COALESCE(?, head_logistics_no),
-           head_logistics_company = COALESCE(?, head_logistics_company),
-           head_shipped_at = COALESCE(?, head_shipped_at),
+       SET head_shipped_at = COALESCE(?, head_shipped_at),
            purchase_status = 'complete',
            operate_status = CASE WHEN operate_status = 'wait_process' THEN 'wait_stock' ELSE operate_status END,
            gmt_modified = ?
@@ -2783,9 +2750,7 @@ function syncFromMiaoshou({ packageIds } = {}) {
         // b0) 妙手侧有采购信息 → 先清空本地该包裹全部采购信息(以妙手为准,避免新旧采购单混存/金额重复累计)
         if (hasMsPurchase && clearPackagePurchaseInfo(p.id, now) > 0) cleared++;
         let hasPurchaseLink = false; // 是否成功关联了至少一条采购单
-        let headLogisticsNo = null;  // 头程单号(取最后一条有 logistics_no 的采购单)
-        let headLogisticsCompany = null;
-        let headSendAt = null;
+        let headSendAt = null;       // 发货时间(取最后一条有 logistics_no 的采购单)
         for (const pur of msPurchases) {
           if (!pur.purchase_sn || !pur.platform) continue; // 缺关键字段跳过
           // 平台映射:天猫 → 淘宝(用户要求统一为淘宝)
@@ -2830,17 +2795,15 @@ function syncFromMiaoshou({ packageIds } = {}) {
           insLink.run(poId, p.id, qty, now);
           purchases++;
           hasPurchaseLink = true;
-          // 记录头程物流信息(有 logistics_no 的采购单覆盖前面的)
+          // 记录发货时间(有 logistics_no 的采购单覆盖前面的;阶段2 起单号/公司只存采购单侧)
           if (pur.logistics_no) {
-            headLogisticsNo = pur.logistics_no;
-            headLogisticsCompany = pur.logistics_company || null;
             headSendAt = pur.send_at || now;
           }
         }
         // c) 如果有关联采购单,推进状态 wait_process → wait_stock(对齐 submitPurchase 逻辑)
         //    有采购信息即视为"已提交采购",包裹应进入待入库
         if (hasPurchaseLink) {
-          advanceStatus.run(headLogisticsNo, headLogisticsCompany, headSendAt, now, p.id);
+          advanceStatus.run(headSendAt, now, p.id);
           advanced++;
         }
       });
@@ -2924,7 +2887,6 @@ export const orderPackageDao = {
   submitPurchase,
   updatePurchaseAlloc,
   updatePurchaseLogistics,
-  fillHeadLogisticsByPosting,
   unlinkPurchase,
   revertToWaitProcess,
   clearAllPurchase,

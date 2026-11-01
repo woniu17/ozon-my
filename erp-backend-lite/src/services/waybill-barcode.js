@@ -20,7 +20,8 @@ const BARCODE_RE = /\b\d{10,}\b/;
 // 货运标签 PDF 中的 OGL 国内集运仓快递单号(2026-10-30)
 // 实测 Ozon /v2/posting/fbs/act/get-container-labels 对 OGL 集运(圆通承运)的发运
 // 返回国内段快递面单 PDF:每页一张面单,含一个 YT 开头的圆通单号(文本+条码)。
-// 该单号即"发往 Ozon OGL 国内集运仓"的快递单号,回填到 op_package.head_logistics_no。
+// 该单号即"发往 Ozon OGL 国内集运仓"的快递单号,2026-11-06 起存发运级
+// op_carriage_history.tracking_number(多容器逗号分隔),不再平铺到包裹级旧字段。
 const YT_RE = /\bYT\d+\b/;
 
 /**

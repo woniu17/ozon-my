@@ -675,6 +675,30 @@ async function ensureMigrations() {
       console.log(`[db] migration: backfilled OGL tracking numbers for ${byCarriage.size} carriages from op_package.head_logistics_no`);
     }
   }
+
+  // 2026-11-06: op_package.head_logistics_no 一次性数据清洗(读时 join 方案收尾)
+  // 背景:该字段历史上被两套语义混写——打货运标签回填的 OGL 圆通号 + 妙手/入库回填的采购快递单号;
+  //   实测 278 个 YT 旧值里 254 个与 op_purchase_order.logistics_no 同号(YT 前缀不专属 OGL,
+  //   圆通同为采购常用快递),另有 1068 个非 YT 旧值全是采购单号。
+  // 清洗规则:值非 YT 开头,或与任意采购单物流号同号 → 置 NULL。清洗后该列只剩少量真 OGL 号
+  //   (含 2 个发运已取消但标签已实际使用的在途货件)。2026-11-06 起 OGL 读取已与该列彻底解耦
+  //   (徽标/搜索只走发运级 op_carriage_history),本清洗仅为数据卫生,为后续 DROP COLUMN 做准备。
+  // 幂等:清过的值已为 NULL,重复执行无副作用;标记表防重复扫描。
+  {
+    const CLEANUP_KEY = 'head_logistics_cleanup_20261106';
+    if (!db.prepare(`SELECT 1 FROM schema_migration_flags WHERE key = ?`).get(CLEANUP_KEY)) {
+      const r = db.prepare(`
+        UPDATE op_package SET head_logistics_no = NULL, head_logistics_company = NULL
+        WHERE head_logistics_no IS NOT NULL
+          AND (
+            head_logistics_no NOT LIKE 'YT%'
+            OR EXISTS (SELECT 1 FROM op_purchase_order po WHERE po.logistics_no = op_package.head_logistics_no)
+          )
+      `).run();
+      db.prepare(`INSERT INTO schema_migration_flags (key, done_at) VALUES (?, datetime('now'))`).run(CLEANUP_KEY);
+      console.log(`[db] migration: cleaned ${r.changes} purchase-logistics values from op_package.head_logistics_no`);
+    }
+  }
 }
 
 // 一次性回填 product_data_cache.description_quality
