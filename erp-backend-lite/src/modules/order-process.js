@@ -2309,24 +2309,28 @@ router.post('/admin/api/order-process/carriage/available-postings', async (req, 
 // Ozon 发运 API 只认本店货件;跨店货件仅本地关联(source='manual'),不推送 Ozon。
 // 候选数据源为本地库(待发运包裹),支持按打单时间 COALESCE(waybill_printed_at, dispatched_at) 筛选。
 
-// 跨店待发运候选
+// 跨店待发运候选(2026-11-06:sourceStoreIds 支持多选,兼容单选 sourceStoreId)
 router.post('/admin/api/order-process/carriage/mixed-candidates', async (req, res) => {
   try {
     const store = requireCarriageStore(req); // 发运单归属店铺
     const carriageId = req.body?.carriageId;
-    const sourceStoreId = req.body?.sourceStoreId;
     if (!carriageId) throw new ApiError(ErrorCode.VALIDATION_ERROR, 'carriageId 必填');
-    if (!sourceStoreId) throw new ApiError(ErrorCode.VALIDATION_ERROR, 'sourceStoreId 必填');
-    if (String(sourceStoreId) === String(store.id)) {
-      throw new ApiError(ErrorCode.VALIDATION_ERROR, '跨店货件请选择其它店铺');
-    }
-    const srcStore = (config.loadStores() || []).find((s) => String(s.id) === String(sourceStoreId));
-    if (!srcStore || !srcStore?.sync_credentials?.clientId) {
-      throw new ApiError(ErrorCode.VALIDATION_ERROR, `店铺 ${sourceStoreId} 未配置 sync_credentials`);
+    // 多选(Web 端)优先,单选(小程序端)兜底
+    const rawIds = Array.isArray(req.body?.sourceStoreIds) && req.body.sourceStoreIds.length
+      ? req.body.sourceStoreIds.map((x) => String(x))
+      : (req.body?.sourceStoreId ? [String(req.body.sourceStoreId)] : []);
+    if (!rawIds.length) throw new ApiError(ErrorCode.VALIDATION_ERROR, '请至少选择一个跨店店铺');
+    // 排除归属店铺,只保留已配置 sync_credentials 的店铺
+    const srcStores = (config.loadStores() || []).filter(
+      (s) => rawIds.includes(String(s.id)) && String(s.id) !== String(store.id) && s?.sync_credentials?.clientId
+    );
+    if (!srcStores.length) {
+      throw new ApiError(ErrorCode.VALIDATION_ERROR, '所选店铺不可用(需为其它店铺且已配置同步凭据)');
     }
     const printedFrom = req.body?.printedFrom || null;
     const printedTo = req.body?.printedTo || null;
     const keyword = req.body?.keyword ? String(req.body.keyword).trim() : null;
+    const storePlaceholders = srcStores.map(() => '?').join(', ');
     const rows = db
       .prepare(
         `SELECT o.id AS ozonOrderId,
@@ -2345,7 +2349,7 @@ router.post('/admin/api/order-process/carriage/mixed-candidates', async (req, re
                 COALESCE(p.waybill_printed_at, p.dispatched_at) AS printedAt
          FROM op_package p
          JOIN op_ozon_order o ON o.id = p.ozon_order_id
-         WHERE p.store_id = ?
+         WHERE p.store_id IN (${storePlaceholders})
            AND p.operate_status = 'wait_dispatch'
            AND (? IS NULL OR COALESCE(p.waybill_printed_at, p.dispatched_at) >= ?)
            AND (? IS NULL OR COALESCE(p.waybill_printed_at, p.dispatched_at) <= ?)
@@ -2361,17 +2365,18 @@ router.post('/admin/api/order-process/carriage/mixed-candidates', async (req, re
          LIMIT 500`
       )
       .all(
-        String(sourceStoreId),
+        ...srcStores.map((s) => String(s.id)),
         printedFrom, printedFrom,
         printedTo, printedTo,
         keyword ? `%${keyword}%` : null, keyword ? `%${keyword}%` : null,
         Number(carriageId)
       );
 
+    const nameById = new Map(srcStores.map((s) => [String(s.id), s.name || s.id]));
     const postings = rows.map((r) => ({
       posting_number: r.postingNumber,
       store_id: r.storeId,
-      store_name: srcStore.name || '',
+      store_name: nameById.get(String(r.storeId)) || '',
       ozon_order_id: r.ozonOrderId,
       package_id: r.packageId,
       order_id: r.orderId,

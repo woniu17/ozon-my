@@ -187,28 +187,27 @@ const candidate = reactive({
   open: false,
   loading: false,
   tab: 'self',            // self=本店货件 / cross=跨店货件
-  sourceStoreId: '',      // 跨店:候选店铺 id
-  printedRange: 'all',    // 打单时间快捷筛选:all/today/yesterday/3d/7d
-  printedFrom: '',        // 自定义开始日期 YYYY-MM-DD
-  printedTo: '',          // 自定义结束日期 YYYY-MM-DD
+  sourceStoreIds: [],     // 跨店:候选店铺 id 多选(默认全选)
+  printedRange: 'all',    // 打单时间快捷筛选:all/today/yesterday
+  printedFrom: '',        // 自定义起始日期 YYYY-MM-DD(至今,优先于快捷筛选)
   keyword: '',
   postings: [],
   selected: {},
 });
 
-// 跨店候选(2026-11-02)
+// 跨店候选(2026-11-02;2026-11-06 店铺多选/全选,快捷筛选只留全部/今天/昨天)
 const PRINTED_RANGES = [
   { key: 'all', label: '全部' },
   { key: 'today', label: '今天' },
   { key: 'yesterday', label: '昨天' },
-  { key: '3d', label: '近3天' },
-  { key: '7d', label: '近7天' },
 ];
 const crossStores = computed(() => storesStore.list.filter((s) => String(s.id) !== String(storeId.value)));
-const crossStoreName = computed(() => {
-  const s = crossStores.value.find((x) => String(x.id) === String(candidate.sourceStoreId));
-  return s?.name || candidate.sourceStoreId || '';
-});
+const allStoresSelected = computed(
+  () => crossStores.value.length > 0 && crossStores.value.every((s) => candidate.sourceStoreIds.includes(s.id))
+);
+function toggleAllStores() {
+  candidate.sourceStoreIds = allStoresSelected.value ? [] : crossStores.value.map((s) => s.id);
+}
 
 // 待发运货件弹窗(2026-11-02:点击占位行"货件数"查看该配送方式下待发运货件)
 const pendingPostings = reactive({
@@ -929,10 +928,9 @@ async function onOpenCandidate() {
   candidate.open = true;
   candidate.tab = 'self';
   candidate.selected = {};
-  candidate.sourceStoreId = '';
+  candidate.sourceStoreIds = [];
   candidate.printedRange = 'all';
   candidate.printedFrom = '';
-  candidate.printedTo = '';
   candidate.keyword = '';
   candidate.postings = [];
   await loadSelfCandidates();
@@ -961,39 +959,32 @@ function switchCandidateTab(tab) {
   candidate.selected = {};
   candidate.postings = [];
   if (tab === 'cross') {
-    candidate.sourceStoreId = crossStores.value[0]?.id || '';
+    candidate.sourceStoreIds = crossStores.value.map((s) => s.id); // 默认全选
     candidate.printedRange = 'all';
     candidate.printedFrom = '';
-    candidate.printedTo = '';
     candidate.keyword = '';
   }
 }
 
 function setPrintedRange(key) {
   candidate.printedRange = key;
+  candidate.printedFrom = ''; // 点快捷选项即清除自定义日期,避免两套条件叠加
 }
 
-// 计算打单时间筛选区间 → UTC ISO(北京时间日界,与打单记录页一致)
-function computePrintedRange(key, fromDate, toDate) {
+// 计算打单时间筛选区间 → UTC ISO(北京时间日界;自定义为起始日至今)
+function computePrintedRange(key, fromDate) {
   const pad = (n) => String(n).padStart(2, '0');
   const dayStartIso = (d) => {
     const local = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T00:00:00+08:00`;
     return new Date(local).toISOString();
   };
-  if (fromDate || toDate) {
-    return {
-      from: fromDate ? new Date(`${fromDate}T00:00:00+08:00`).toISOString() : undefined,
-      to: toDate ? new Date(`${toDate}T23:59:59.999+08:00`).toISOString() : undefined,
-    };
-  }
+  if (fromDate) return { from: new Date(`${fromDate}T00:00:00+08:00`).toISOString() };
   const now = new Date();
   if (key === 'today') return { from: dayStartIso(now) };
   if (key === 'yesterday') {
     const y = new Date(now.getTime() - 24 * 3600 * 1000);
     return { from: dayStartIso(y), to: dayStartIso(now) };
   }
-  if (key === '3d') return { from: new Date(now.getTime() - 3 * 24 * 3600 * 1000).toISOString() };
-  if (key === '7d') return { from: new Date(now.getTime() - 7 * 24 * 3600 * 1000).toISOString() };
   return {};
 }
 
@@ -1005,16 +996,16 @@ function fmtPrinted(iso) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-// 跨店待发运候选(本地库 + 打单时间筛选)
+// 跨店待发运候选(本地库 + 打单时间筛选;2026-11-06 店铺多选)
 async function loadCrossCandidates() {
-  if (!candidate.sourceStoreId) {
+  if (!candidate.sourceStoreIds.length) {
     show('请先选择店铺', 'warning');
     return;
   }
   candidate.loading = true;
   try {
-    const params = { carriageId: detail.carriageId, sourceStoreId: candidate.sourceStoreId };
-    const range = computePrintedRange(candidate.printedRange, candidate.printedFrom, candidate.printedTo);
+    const params = { carriageId: detail.carriageId, sourceStoreIds: candidate.sourceStoreIds };
+    const range = computePrintedRange(candidate.printedRange, candidate.printedFrom);
     if (range.from) params.printedFrom = range.from;
     if (range.to) params.printedTo = range.to;
     if (candidate.keyword.trim()) params.keyword = candidate.keyword.trim();
@@ -1028,6 +1019,15 @@ async function loadCrossCandidates() {
     candidate.loading = false;
   }
 }
+
+// 候选列表全选/反选(2026-11-06)
+function selectAllCandidates() {
+  for (const p of candidate.postings) candidate.selected[p.posting_number] = true;
+}
+function invertCandidates() {
+  for (const p of candidate.postings) candidate.selected[p.posting_number] = !candidate.selected[p.posting_number];
+}
+const selectedCount = computed(() => candidate.postings.filter((p) => candidate.selected[p.posting_number]).length);
 
 // 确认加入候选货件
 function onConfirmAddCandidates() {
@@ -1893,12 +1893,19 @@ defineExpose({ refreshCurrent, listLoading });
         <button class="candidate-tab" :class="{ on: candidate.tab === 'cross' }" @click="switchCandidateTab('cross')">跨店货件</button>
       </div>
 
-      <!-- 跨店筛选栏(店铺 + 打单时间 + 关键字) -->
+      <!-- 跨店筛选栏(2026-11-06:店铺全选/多选 + 打单时间快捷 + 起始日至今 + 关键字) -->
       <div v-if="candidate.tab === 'cross'" class="candidate-filter">
         <div class="filter-row">
-          <select v-model="candidate.sourceStoreId" class="form-control filter-store">
-            <option v-for="s in crossStores" :key="s.id" :value="s.id">{{ s.name || s.id }}</option>
-          </select>
+          <label class="filter-check filter-check-all">
+            <input type="checkbox" :checked="allStoresSelected" @change="toggleAllStores" />
+            全选
+          </label>
+          <label v-for="s in crossStores" :key="s.id" class="filter-check">
+            <input type="checkbox" :value="s.id" v-model="candidate.sourceStoreIds" />
+            {{ s.name || s.id }}
+          </label>
+        </div>
+        <div class="filter-row">
           <input v-model="candidate.keyword" class="form-control filter-keyword" placeholder="货件号搜索" @keyup.enter="loadCrossCandidates" />
           <button class="btn btn-primary btn-sm" :disabled="candidate.loading" @click="loadCrossCandidates">搜索</button>
         </div>
@@ -1907,14 +1914,13 @@ defineExpose({ refreshCurrent, listLoading });
             v-for="r in PRINTED_RANGES"
             :key="r.key"
             class="chip"
-            :class="{ on: candidate.printedRange === r.key }"
+            :class="{ on: candidate.printedRange === r.key && !candidate.printedFrom }"
             @click="setPrintedRange(r.key)"
           >{{ r.label }}</button>
         </div>
         <div class="filter-dates">
-          <input v-model="candidate.printedFrom" type="date" class="form-control" title="打单开始日期" />
-          <span class="date-sep">~</span>
-          <input v-model="candidate.printedTo" type="date" class="form-control" title="打单结束日期" />
+          <input v-model="candidate.printedFrom" type="date" class="form-control filter-date" title="打单起始日期" />
+          <span class="date-sep">~ 至今</span>
         </div>
       </div>
 
@@ -1924,9 +1930,12 @@ defineExpose({ refreshCurrent, listLoading });
           已准备发运、不在当前发运中的本店货件(共 {{ candidate.postings.length }} 个),勾选后加入
         </span>
         <span v-else class="field-hint">
-          店铺「{{ crossStoreName }}」待发运货件(共 {{ candidate.postings.length }} 个),已排除当前发运中货件
+          已选 {{ candidate.sourceStoreIds.length }}/{{ crossStores.length }} 家店铺的待发运货件(共 {{ candidate.postings.length }} 个),已排除当前发运中货件
         </span>
         <div class="spacer"></div>
+        <span class="field-hint">已选 {{ selectedCount }} 个</span>
+        <button class="btn btn-ghost btn-sm" :disabled="candidate.loading || !candidate.postings.length" @click="selectAllCandidates">全选</button>
+        <button class="btn btn-ghost btn-sm" :disabled="candidate.loading || !candidate.postings.length" @click="invertCandidates">反选</button>
         <button class="btn btn-ghost btn-sm" :disabled="candidate.loading" @click="candidate.tab === 'self' ? loadSelfCandidates() : loadCrossCandidates()">刷新</button>
         <button class="btn btn-primary btn-sm" :disabled="candidate.loading" @click="onConfirmAddCandidates">
           加入选中
@@ -2615,15 +2624,28 @@ defineExpose({ refreshCurrent, listLoading });
 }
 .filter-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
-.filter-store {
-  max-width: 220px;
-  min-width: 140px;
+.filter-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.filter-check-all {
+  color: var(--primary);
+  font-weight: 600;
 }
 .filter-keyword {
   max-width: 220px;
+}
+.filter-date {
+  max-width: 160px;
 }
 .filter-chips {
   display: flex;
