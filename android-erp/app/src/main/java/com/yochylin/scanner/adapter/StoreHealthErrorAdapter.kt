@@ -10,6 +10,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.yochylin.scanner.R
 import com.yochylin.scanner.model.RatingErrorItem
 import com.yochylin.scanner.setRoundedBg
+import java.util.Locale
 
 /** 店铺健康：影响错误指数货件明细适配器 */
 class StoreHealthErrorAdapter : RecyclerView.Adapter<StoreHealthErrorAdapter.VH>() {
@@ -73,9 +74,9 @@ class StoreHealthErrorAdapter : RecyclerView.Adapter<StoreHealthErrorAdapter.VH>
             typeTag.text = typeLabel(type)
             typeTag.setRoundedBg(Color.parseColor(typeColor(type)), 4f)
 
-            // 错误指数(本地阈值: ≤0.15 绿 ≤0.35 黄 >0.35 红)
+            // 错误指数(Ozon 官方阈值: ≤4% 绿 ≤10% 青 ≤20% 黄 ≤40% 橙 >40% 红)
             val idx = item.index ?: 0.0
-            indexView.text = "指数 ${fmtNum(idx)}"
+            indexView.text = "指数 ${String.format(Locale.US, "%.2f%%", idx * 100)}"
             indexView.setTextColor(Color.parseColor(indexColor(idx)))
 
             // 宽限状态

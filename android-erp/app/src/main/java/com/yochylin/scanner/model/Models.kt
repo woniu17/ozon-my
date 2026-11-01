@@ -392,6 +392,7 @@ data class RatingStoreHealth(
     val periodFrom: String? = null,
     val periodTo: String? = null,
     val syncedAt: String? = null,
+    val lastErrorAt: String? = null,
     val defects: List<RatingDefect>? = null,
 )
 

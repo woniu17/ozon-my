@@ -207,6 +207,23 @@ const sortedStores = computed(() => {
   const stores = summary.value?.stores || [];
   return [...stores].sort((a, b) => String(a.storeId).localeCompare(String(b.storeId)));
 });
+/**
+ * 归零预测:滚动窗口为 [D-14, D-1](不含今日),最后错误发生在 C 日时最多影响至 C+14,
+ * 因此 C+15 起指数归零。假设未来无新取消,返回预测文案;已归零/缺数据/已过期返回空串。
+ */
+function zeroForecast(s) {
+  const idx = Number(s.index) || 0;
+  if (idx <= 0 || !s.lastErrorAt) return '';
+  const c = new Date(`${String(s.lastErrorAt).slice(0, 10)}T00:00:00Z`);
+  if (Number.isNaN(c.getTime())) return '';
+  c.setUTCDate(c.getUTCDate() + 15);
+  const now = new Date();
+  const todayUtc = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  const daysLeft = Math.round((c.getTime() - todayUtc) / 86400000);
+  if (daysLeft <= 0) return '';
+  const p = (n) => String(n).padStart(2, '0');
+  return `预测:无新取消时 ${p(c.getUTCMonth() + 1)}-${p(c.getUTCDate())} 归零(还剩 ${daysLeft} 天)`;
+}
 function typeLabel(t) {
   return t === 'SELLER_CANCELLATION' ? '卖家取消' : t === 'SELLER_DELAY' ? '卖家逾期' : t || '未知';
 }
@@ -268,6 +285,7 @@ onMounted(() => {
           <span>{{ s.periodFrom }} ~ {{ fmtPeriodEnd(s.periodTo) }}</span>
           <span>罚款 ¥{{ fmtMoney(s.processingCostsSum) }}</span>
         </div>
+        <div v-if="zeroForecast(s)" class="store-card-forecast">{{ zeroForecast(s) }}</div>
       </div>
     </div>
     <div v-else-if="summary && summary.stores.length === 0" class="empty-tip">
@@ -452,6 +470,13 @@ onMounted(() => {
   margin-top: 8px;
   font-size: 11px;
   color: #86909c;
+}
+
+/* 归零预测行(滚动窗口推算,假设未来无新取消) */
+.store-card-forecast {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #00a32e;
 }
 
 .red-text { color: #f53f3f; }

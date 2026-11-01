@@ -211,28 +211,17 @@ class StoreHealthFragment : Fragment() {
         }
     }
 
-    // ── 各店铺错误指数卡片(每行最多3个,按店铺编号 YQL01~YQL06 顺序) ──
+    // ── 各店铺错误指数卡片(一行一个,按店铺编号 YQL01~YQL06 顺序) ──
     private fun renderStores(stores: List<RatingStoreHealth>) {
         overviewContainer.removeAllViews()
         if (stores.isEmpty()) return
         val sorted = stores.sortedBy { it.storeId ?: "" }
-        var i = 0
-        while (i < sorted.size) {
-            val row = LinearLayout(requireContext()).apply {
-                orientation = LinearLayout.HORIZONTAL
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { if (i > 0) topMargin = dp(10).toInt() }
-            }
-            for (col in 0 until 3) {
-                val store = sorted.getOrNull(i + col) ?: break
-                val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                if (col > 0) lp.leftMargin = dp(10).toInt()
-                row.addView(storeIndexCard(store), lp)
-            }
-            overviewContainer.addView(row)
-            i += 3
+        sorted.forEachIndexed { i, store ->
+            val lp = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { if (i > 0) topMargin = dp(10).toInt() }
+            overviewContainer.addView(storeIndexCard(store), lp)
         }
     }
 
@@ -245,7 +234,7 @@ class StoreHealthFragment : Fragment() {
             setRoundedBgStroke(Color.WHITE, Color.parseColor("#E9EDF3"), 14f, 1f)
             setPadding(dp(12).toInt(), dp(10).toInt(), dp(12).toInt(), dp(8).toInt())
 
-            // 店铺名 + 指数%(Ozon 官方阈值着色)
+            // 店铺名 + 指数%(Ozon 官方阈值着色;整行卡片宽度充裕)
             addView(LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -284,6 +273,7 @@ class StoreHealthFragment : Fragment() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(0, dp(8).toInt(), 0, 0)
+                // 周期与罚款同行(整行卡片宽度充裕,用完整日期)
                 val period = if (!store.periodFrom.isNullOrBlank() && !store.periodTo.isNullOrBlank()) {
                     "${store.periodFrom} ~ ${shiftDays(store.periodTo, -1)}"
                 } else {
@@ -306,6 +296,16 @@ class StoreHealthFragment : Fragment() {
                     }
                 })
             })
+
+            // 归零预测(滚动窗口推算,假设未来无新取消)
+            zeroForecastText(store)?.let { pred ->
+                addView(TextView(ctx).apply {
+                    text = pred
+                    setTextColor(Color.parseColor("#00a32e"))
+                    textSize = 9f
+                    setPadding(0, dp(4).toInt(), 0, 0)
+                })
+            }
         }
     }
 
@@ -455,6 +455,39 @@ class StoreHealthFragment : Fragment() {
         index <= 0.20 -> "#d99000"
         index <= 0.40 -> "#ee6a00"
         else -> "#e53414"
+    }
+
+    /**
+     * 归零预测:滚动窗口为 [D-14, D-1](不含今日),最后错误发生在 C 日时最多影响至 C+14,
+     * 因此 C+15 起指数归零。假设未来无新取消,返回 "预测:无新取消时 MM-DD 归零(还剩 X 天)";
+     * 指数已为 0、缺最后错误时间或已过期时返回 null(不展示)。
+     */
+    private fun zeroForecastText(store: RatingStoreHealth): String? {
+        val idx = store.index ?: 0.0
+        if (idx <= 0.0) return null
+        val lastErrorAt = store.lastErrorAt ?: return null
+        val dateStr = lastErrorAt.take(10) // RFC3339(如 2026-10-21T12:18:00Z)取日期部分
+        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+        val lastErrorDay = try {
+            sdf.parse(dateStr) ?: return null
+        } catch (e: Exception) {
+            return null
+        }
+        val cal = Calendar.getInstance().apply {
+            time = lastErrorDay
+            add(Calendar.DAY_OF_YEAR, 15)
+        }
+        val zeroDate = cal.time
+        val today = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }.time
+        val daysLeft = ((zeroDate.time - today.time) / (24 * 60 * 60 * 1000L)).toInt()
+        if (daysLeft <= 0) return null
+        val zeroStr = SimpleDateFormat("MM-dd", Locale.US).format(zeroDate)
+        return "预测:无新取消时 $zeroStr 归零(还剩 $daysLeft 天)"
     }
 
     // ── Ozon 风格指数刻度条：五色区段(绿/青/黄/橙/红)+当前指数填充+阈值标签 ──

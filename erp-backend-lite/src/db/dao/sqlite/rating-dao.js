@@ -138,6 +138,17 @@ export function getRatingDailyByStore(storeIds, from, to) {
   ).all(String(from), String(to), ...c.params);
 }
 
+/** 每店最后错误时间(归零预测用):返回 [{ storeId, lastErrorAt }] */
+export function getRatingLastErrorDates(storeIds, from, to) {
+  const c = buildStoreClause(storeIds);
+  return db.prepare(
+    `SELECT store_id AS storeId, MAX(error_at) AS lastErrorAt
+     FROM op_rating_error_posting
+     WHERE error_at >= ? AND error_at < ?${c.sql}
+     GROUP BY store_id`
+  ).all(dayStart(from), dayEndExclusive(to), ...c.params);
+}
+
 /** 每店当前周期快照:返回 [{ storeId, index, processingCostsSum, currencyCode, periodFrom, periodTo, syncedAt }] */
 export function getRatingSnapshots(storeIds) {
   const c = buildStoreClause(storeIds);

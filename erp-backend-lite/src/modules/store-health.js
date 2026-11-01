@@ -16,6 +16,7 @@ import {
   getRatingSnapshots,
   getRatingErrorTotals,
   getRatingErrors,
+  getRatingLastErrorDates,
 } from '../db/dao/sqlite/rating-dao.js';
 import { runRatingHealthSync, getRatingSyncStatus } from '../services/rating-health-sync.js';
 
@@ -67,7 +68,7 @@ async function resolveRange(storeIds, rawFrom, rawTo) {
 // ── 概览汇总 ──
 // 参数: storeIds(逗号分隔,空=全部), from, to(可选,缺省=指数统计周期)
 // 响应: { stores: [{ storeId, storeName, index, processingCostsSum, currencyCode,
-//         periodFrom, periodTo, syncedAt, defects: [{date,indexByDate,processingCostsSumByDate}] }],
+//         periodFrom, periodTo, syncedAt, lastErrorAt, defects: [{date,indexByDate,processingCostsSumByDate}] }],
 //         totals: { errorPostingCount, sellerCancellationCount, sellerDelayCount,
 //                   graceCount, chargeSum, chargeCurrencyCode },
 //         sync: { running, lastResult } }
@@ -83,10 +84,11 @@ router.get('/admin/api/rating/health/summary', async (req, res, next) => {
     }
     const names = storeNameMap();
 
-    const [snapshots, dailyRows, totals] = await Promise.all([
+    const [snapshots, dailyRows, totals, lastErrors] = await Promise.all([
       getRatingSnapshots(storeIds),
       getRatingDailyByStore(storeIds, range.from, range.to),
       getRatingErrorTotals(storeIds, range.from, range.to),
+      getRatingLastErrorDates(storeIds, range.from, range.to),
     ]);
 
     const defectsByStore = new Map();
@@ -99,6 +101,9 @@ router.get('/admin/api/rating/health/summary', async (req, res, next) => {
       });
     }
 
+    // 每店最后错误时间(前端用于归零预测:滚动窗口 [D-14, D-1] 不含今日)
+    const lastErrorByStore = new Map(lastErrors.map((r) => [r.storeId, r.lastErrorAt]));
+
     const stores = snapshots.map((s) => ({
       storeId: s.storeId,
       storeName: names.get(s.storeId) || s.storeId,
@@ -108,6 +113,7 @@ router.get('/admin/api/rating/health/summary', async (req, res, next) => {
       periodFrom: s.periodFrom,
       periodTo: s.periodTo,
       syncedAt: s.syncedAt,
+      lastErrorAt: lastErrorByStore.get(s.storeId) || null,
       defects: defectsByStore.get(s.storeId) || [],
     }));
 
