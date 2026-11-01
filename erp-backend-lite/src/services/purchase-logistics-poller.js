@@ -17,6 +17,7 @@
 //   妙手同步的采购单轨迹仍由妙手侧更新;本轮询器同字段写入,双路并存最新覆盖。
 // 限速:请求间隔 2s,连续失败 3 次中止本轮(防触发反爬/雪崩);单轮每阶段上限 100 单。
 // 阶段B-TB(2026-09-22):淘宝拉轨迹(buyertrade transit_step.do,按订单号查,响应自带单号/公司)
+// 阶段B-XY(2026-11-01):闲鱼拉轨迹(菜鸟 mtop 接口,按订单号查,响应自带单号/公司;与淘宝同口径)
 // 断点续跑(2026-10-29):轮次执行前把当前阶段写 app_config(purchase_logistics_resume),
 //   进程若在轮次中途被重启,重启后检测到断点立即从该阶段继续,不必整轮重扫;
 //   正常完成才清除断点。阶段内部按原 SQL 扫描,已完成订单会被条件自然过滤(单号已回填/
@@ -26,6 +27,7 @@ import config from '../config/index.js';
 import { getLogisticsForOrder, getTraceForOrder, hasAliOpenApiToken } from './platform-orders/adapters/ali1688-openapi.js';
 import { getPddTrace, searchPddOrder } from './platform-orders/adapters/pdd.js';
 import { getTaobaoTrace } from './platform-orders/adapters/taobao.js';
+import { getXianyuTrace } from './platform-orders/adapters/xianyu.js';
 import logger from '../middleware/log.js';
 import { runWithLog } from './task-run-log.js';
 
@@ -46,9 +48,9 @@ const manualStatus = {
   running: false,        // 本轮进行中(定时轮或手动触发)
   startedAt: null,
   finishedAt: null,
-  phase: '',             // fill-ali/fill-pdd/trace-ali/trace-pdd
+  phase: '',             // fill-ali/fill-pdd/trace-ali/trace-pdd/trace-tb/trace-xy
   progress: { done: 0, total: 0 }, // 当前阶段进度
-  result: null,          // { phaseA, phaseApdd, phaseB, phaseC }
+  result: null,          // { phaseA, phaseApdd, phaseB, phaseC, phaseTb, phaseXy }
   error: null,
 };
 
@@ -384,6 +386,63 @@ async function phaseFetchTaobaoTrace() {
   return { scanned: rows.length, updated, skippedNoAccount };
 }
 
+/** 阶段B-XY(2026-11-01):闲鱼拉完整轨迹(菜鸟 mtop 接口,按订单号查)
+ *  接口按订单号查询,无需先有快递单号;响应自带 mailNo(单号)/companyName(公司),一并回填。
+ *  未发货/未揽收返回空轨迹 → 推进 last_trace_at 避免空转。
+ *  不做签收升级:是否签收以轨迹节点文本为准(与淘宝/PDD 口径一致,前端展开可见) */
+async function phaseFetchXianyuTrace() {
+  const rows = db.prepare(
+    `SELECT id, purchase_sn, logistics_no, buyer_account FROM op_purchase_order
+     WHERE platform = 'xianyu' AND link_status = 'linked'
+       AND purchase_sn IS NOT NULL AND length(purchase_sn) > 0
+       AND status IN ('wait_send', 'shipped', 'part_shipped')
+       AND (last_trace_at IS NULL OR last_trace_at < datetime('now', 'localtime', '-1 hour'))
+     ORDER BY (last_trace_at IS NULL) DESC, gmt_modified DESC
+     LIMIT ?`
+  ).all(MAX_PER_ROUND);
+  if (!rows.length) return { scanned: 0, updated: 0, skippedNoAccount: 0 };
+  manualStatus.progress = { done: 0, total: rows.length };
+
+  const xianyuAccounts = config.platformAccounts.xianyu || [];
+  let updated = 0, skippedNoAccount = 0, consecutive = 0;
+  for (const r of rows) {
+    manualStatus.progress.done++;
+    const account = xianyuAccounts.includes(r.buyer_account) ? r.buyer_account : xianyuAccounts[0];
+    if (!account) { skippedNoAccount++; continue; }
+    try {
+      const { steps, shippingName, trackingNumber } = await getXianyuTrace(r.purchase_sn, account);
+      // 轨迹响应自带快递单号:缺失时回填(顺带 wait_send → shipped);
+      // 已有但不一致(卖家换快递)时覆盖(与淘宝阶段同款处理)
+      if (trackingNumber && !r.logistics_no) {
+        writeFilledLogisticsNo(r.id, trackingNumber, shippingName);
+      } else if (trackingNumber && trackingNumber !== r.logistics_no) {
+        writeChangedLogisticsNo(r.id, trackingNumber, shippingName);
+        logger.info({ purchaseSn: r.purchase_sn, oldNo: r.logistics_no, newNo: trackingNumber },
+          '[purchase-logistics-poller] 阶段B-XY:检测到闲鱼单号变更,已覆盖');
+      }
+      if (steps.length) {
+        writeTraceRow(r.id, steps, shippingName);
+        updated++;
+        logger.info({ purchaseSn: r.purchase_sn, steps: steps.length, shippingName, trackingNumber },
+          '[purchase-logistics-poller] 阶段B-XY:拉取闲鱼轨迹');
+      } else {
+        // 无轨迹(未发货/未揽收):推进 last_trace_at 避免空转
+        db.prepare(`UPDATE op_purchase_order SET last_trace_at = datetime('now', 'localtime') WHERE id = ?`).run(r.id);
+      }
+      consecutive = 0;
+    } catch (e) {
+      consecutive++;
+      logger.warn({ purchaseSn: r.purchase_sn, err: e.message }, '[purchase-logistics-poller] 阶段B-XY:轨迹查询失败');
+      if (consecutive >= MAX_CONSECUTIVE_FAILURES) {
+        logger.warn('[purchase-logistics-poller] 阶段B-XY:连续失败达阈值,本轮中止');
+        break;
+      }
+    }
+    await sleep(REQUEST_INTERVAL_MS);
+  }
+  return { scanned: rows.length, updated, skippedNoAccount };
+}
+
 async function runOnce() {
   // 断点续跑(2026-10-29):读取上次未完成轮次记录,从该阶段继续执行后续阶段;
   // 无断点时整轮执行。每个阶段开始前把断点写入 app_config,进程被重启后据此续跑。
@@ -403,7 +462,8 @@ async function runOnce() {
   const b = await run('trace-ali', phaseFetchTrace);
   const c = await run('trace-pdd', phaseFetchPddTrace);
   const tb = await run('trace-tb', phaseFetchTaobaoTrace);
-  const result = { phaseA: a, phaseApdd: ap, phaseB: b, phaseC: c, phaseTb: tb };
+  const xy = await run('trace-xy', phaseFetchXianyuTrace);
+  const result = { phaseA: a, phaseApdd: ap, phaseB: b, phaseC: c, phaseTb: tb, phaseXy: xy };
   logger.info(result, '[purchase-logistics-poller] 本轮完成');
   return result;
 }
@@ -426,7 +486,7 @@ function launchRound() {
       // 阶段A/PDD 返回 filled(补单号数),轨迹阶段返回 updated(轨迹更新数),
       // 之前统一取 updated 导致阶段A/PDD 摘要永远显示 0,误导排查(2026-10-29)
       const sum = (x, key) => (x && typeof x === 'object' ? `${x[key] ?? 0}/${x.scanned ?? 0}` : '-');
-      return `阶段A ${sum(r.phaseA, 'filled')} · PDD单号 ${sum(r.phaseApdd, 'filled')} · 轨迹 ${sum(r.phaseB, 'updated')} · PDD轨迹 ${sum(r.phaseC, 'updated')} · TB轨迹 ${sum(r.phaseTb, 'updated')}`;
+      return `阶段A ${sum(r.phaseA, 'filled')} · PDD单号 ${sum(r.phaseApdd, 'filled')} · 轨迹 ${sum(r.phaseB, 'updated')} · PDD轨迹 ${sum(r.phaseC, 'updated')} · TB轨迹 ${sum(r.phaseTb, 'updated')} · XY轨迹 ${sum(r.phaseXy, 'updated')}`;
     },
   })
     .then((r) => {
@@ -473,7 +533,7 @@ const STATE_KEY = 'purchase_logistics_last_run_at';
 // ── 断点续跑(app_config,2026-10-29):轮次被重启打断后记住进行到哪个阶段,
 //    重启后从断点继续,不必整轮重扫;正常完成才清除断点──
 const RESUME_KEY = 'purchase_logistics_resume';
-const PHASE_ORDER = ['fill-ali', 'fill-pdd', 'trace-ali', 'trace-pdd', 'trace-tb'];
+const PHASE_ORDER = ['fill-ali', 'fill-pdd', 'trace-ali', 'trace-pdd', 'trace-tb', 'trace-xy'];
 
 function readResume() {
   try {
@@ -636,6 +696,7 @@ function writeChangedLogisticsNo(id, newNo, company) {
  *  1688:补单号(缺时 getLogisticsForOrder)→ 拉轨迹(getTraceForOrder)
  *  拼多多:补单号(缺时 searchPddOrder)→ 拉轨迹(getPddTrace,顺带回填缺失公司名)
  *  淘宝(2026-09-22):拉轨迹(getTaobaoTrace,按订单号查,顺带回填缺失单号/公司名)
+ *  闲鱼(2026-11-01):拉轨迹(getXianyuTrace,按订单号查,顺带回填缺失单号/公司名)
  *  其他平台/手工单:暂无可用接口,计入 skip
  *  @returns {{ orders: number, results: Array<{purchaseSn, platform, action, detail}> }} */
 async function syncPurchaseLogisticsForPackage(packageId) {
@@ -651,6 +712,7 @@ async function syncPurchaseLogisticsForPackage(packageId) {
 
   const pddAccounts = config.platformAccounts.pdd || [];
   const taobaoAccounts = config.platformAccounts.taobao || [];
+  const xianyuAccounts = config.platformAccounts.xianyu || [];
   const results = [];
   for (const o of orders) {
     if (!o.purchaseSn) {
@@ -739,6 +801,26 @@ async function syncPurchaseLogisticsForPackage(packageId) {
           writeChangedLogisticsNo(o.id, expressId, shippingName);
           changedNo = `单号变更 ${o.logisticsNo} → ${expressId},`;
           o.logisticsNo = expressId;
+        }
+        results.push({ purchaseSn: o.purchaseSn, platform: o.platform, action: 'trace', detail: (filled ? '已补单号,' : '') + changedNo + writeTraceRow(o.id, steps, shippingName) });
+      } else if (o.platform === 'xianyu') {
+        // 闲鱼(2026-11-01):菜鸟 mtop 按订单号查询,无需先有快递单号;
+        // 响应自带 trackingNumber(单号)/shippingName(公司),一并回填(与淘宝同款处理)
+        const account = xianyuAccounts.includes(o.buyerAccount) ? o.buyerAccount : xianyuAccounts[0];
+        if (!account) {
+          results.push({ purchaseSn: o.purchaseSn, platform: o.platform, action: 'skip', detail: '未配置闲鱼账号' });
+          continue;
+        }
+        const { steps, shippingName, trackingNumber } = await getXianyuTrace(o.purchaseSn, account);
+        let changedNo = '';
+        if (trackingNumber && !o.logisticsNo) {
+          writeFilledLogisticsNo(o.id, trackingNumber, shippingName);
+          o.logisticsNo = trackingNumber;
+          filled = true;
+        } else if (trackingNumber && trackingNumber !== o.logisticsNo) {
+          writeChangedLogisticsNo(o.id, trackingNumber, shippingName);
+          changedNo = `单号变更 ${o.logisticsNo} → ${trackingNumber},`;
+          o.logisticsNo = trackingNumber;
         }
         results.push({ purchaseSn: o.purchaseSn, platform: o.platform, action: 'trace', detail: (filled ? '已补单号,' : '') + changedNo + writeTraceRow(o.id, steps, shippingName) });
       } else {
