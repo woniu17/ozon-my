@@ -1668,6 +1668,20 @@ async function refreshCarriagePostingLink(store, carriageId, meta = {}) {
   }
 }
 
+// 本地活跃"发运-货件"关联计数(跨店全量;2026-11-06)
+// Ozon 实时接口对每个店铺只返回本店视角的货件列表/数量,跨店加入的货件看不到;
+// op_carriage_posting 是跨店聚合视图(添加货件/刷新关联/历史同步共同维护),按此补全展示口径。
+// 返回 Map<carriage_id(数字), 活跃货件数>
+function getLocalActivePostingCounts() {
+  const rows = db
+    .prepare(
+      `SELECT carriage_id, COUNT(*) AS n
+       FROM op_carriage_posting WHERE removed_at IS NULL GROUP BY carriage_id`
+    )
+    .all();
+  return new Map(rows.map((r) => [Number(r.carriage_id), Number(r.n)]));
+}
+
 // 为发运清单附加"24h内发运期限 / 已超时"货件数(2026-11-02)
 // 数据源:本地 op_ozon_order.shipment_date(Ozon cutoff,与订单列表倒计时同源)。
 //   - 占位行(可创建发运):该配送方式下 status=awaiting_deliver 的货件
@@ -1713,12 +1727,39 @@ async function attachCarriageDeadlineCounts(store, methods) {
     }
   }
 
-  // ② 真实发运:并行拉货件号 → 本地反查 shipment_date
+  // ② 真实发运:优先用本地"发运-货件"关联(跨店全量)反查 shipment_date;
+  //    本地无关联行的发运(未打开过详情/未同步)回退实时拉取(仅本店视角,2026-11-02 原逻辑)
   await Promise.all(
     realCarriages.map(async (carriage) => {
       carriage.deadline_24h_count = 0;
       carriage.deadline_overdue_count = 0;
       try {
+        const links = db
+          .prepare(
+            `SELECT DISTINCT cp.store_id || '|' || cp.posting_number AS k
+             FROM op_carriage_posting cp
+             WHERE cp.carriage_id = ? AND cp.removed_at IS NULL`
+          )
+          .all(Number(carriage.id));
+        if (links.length) {
+          const keys = [...new Set(links.map((l) => l.k))];
+          const slots = keys.map(() => '?').join(',');
+          const rows = db
+            .prepare(
+              `SELECT SUM(CASE WHEN o.shipment_date > ? THEN 1 ELSE 0 END) AS within24,
+                      SUM(CASE WHEN o.shipment_date <= ? THEN 1 ELSE 0 END) AS overdue
+               FROM op_ozon_order o
+               WHERE (o.store_id || '|' || o.posting_number) IN (${slots})
+                 AND o.shipment_date IS NOT NULL
+                 AND o.shipment_date <= ?
+                 AND o.status NOT IN ('delivering', 'delivered', 'cancelled', 'returned')`
+            )
+            .all(nowIso, nowIso, ...keys, cutoffIso);
+          carriage.deadline_24h_count = Number(rows[0]?.within24) || 0;
+          carriage.deadline_overdue_count = Number(rows[0]?.overdue) || 0;
+          return;
+        }
+        // 回退:实时拉货件号(本店视角)→ 本地反查 shipment_date
         const numbers = [];
         let cursor = '';
         let guard = 0;
@@ -2022,6 +2063,14 @@ router.post('/admin/api/order-process/carriage/list', async (req, res) => {
         if (!c.tracking_number && tMap.has(Number(c.id))) c.tracking_number = tMap.get(Number(c.id));
       }
     }
+    // 2026-11-06:货件数补全跨店(实时接口只含本店货件;本地关联是跨店全量,取较大值覆盖)
+    const cntMap = getLocalActivePostingCounts();
+    for (const m of r?.methods || []) {
+      for (const c of m.carriages || []) {
+        const n = cntMap.get(Number(c.id)) || 0;
+        if (n > 0) c.postings_count = Math.max(n, Number(c.postings_count) || 0);
+      }
+    }
     // 2026-11-02:附加"24h内发运期限/已超时"货件数(本地 shipment_date 反查)
     try {
       await attachCarriageDeadlineCounts(store, r?.methods || []);
@@ -2098,6 +2147,12 @@ router.post('/admin/api/order-process/carriage/history/list', async (req, res) =
         from_history: true,
       };
     });
+    // 2026-11-06:历史行货件数同样补全跨店(快照值来自实时接口,只含本店;本地关联是跨店全量)
+    const cntMap = getLocalActivePostingCounts();
+    for (const it of items) {
+      const n = cntMap.get(Number(it.id)) || 0;
+      if (n > 0) it.postings_count = Math.max(n, Number(it.postings_count) || 0);
+    }
     res.json(ok({ items }));
   } catch (e) { carriageHandleError(e, req, res, '获取发运历史'); }
 });
