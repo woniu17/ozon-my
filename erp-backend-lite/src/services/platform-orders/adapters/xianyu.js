@@ -11,6 +11,13 @@
 //  - 响应为动态卡片(commonData/head/content/tail 四段),聚合还原
 //  - token 失败(FAIL_SYS_TOKEN_EMPTY/ILLEGAL_ACCESS)→ 服务器轮换 _m_h5_tk → 重取重签重试 ×1
 //
+// 快递单号+物流轨迹(2026-11-01,在已登录页面实测):
+//  - mtop.cainiao.ld.detail.tradeid.ordercode.mailno.rescode.get.xy(菜鸟承运网关,共用 mtop 签名)
+//  - data={"tradeId":"<闲鱼订单号>"}(订单号超 JS 安全整数,必须字符串);type=originaljson,不带 valueType
+//  - 响应 data.detailViewList[] 每元素一包裹:companyList[]={companyName,mailNo,...},
+//    detailList[] 为全量轨迹(时间升序);网页"物流记录"按钮是占位,轨迹数据直接走本接口
+//  - 搜索命中后回填 trackingNumber;getXianyuTrace 按订单号拉轨迹(对齐 getTaobaoTrace 口径)
+//
 // 执行位置:页面以 www.goofish.com 为 origin(站点自身即从该 origin 跨域调网关,
 // CORS 放行 credentials);载体页用 goofish.com 首页(参照淘宝:不能用网关自身当 origin)
 
@@ -18,8 +25,13 @@ import { ApiError, ErrorCode } from '../../../utils/error-codes.js';
 import { withPage, readBuyerIdentity } from '../browser-manager.js';
 import { mtopSign, tokenFromCookies } from '../mtop-sign.js';
 import { postFormInPage } from '../page-fetch.js';
+import logger from '../../../middleware/log.js';
 
-const XY_API = 'https://h5api.m.goofish.com/h5/mtop.idle.web.trade.bought.list/1.0/';
+// mtop 网关(api 名拼路径 h5/mtop.xxx/1.0/),列表与轨迹接口共用网关与签名
+const XY_GATEWAY = 'https://h5api.m.goofish.com/h5/';
+const XY_LIST_API = 'mtop.idle.web.trade.bought.list';
+// 快递单号+轨迹(菜鸟接口,2026-11-01 实测;网页"物流记录"按钮是占位,数据直接走本接口)
+const XY_TRACE_API = 'mtop.cainiao.ld.detail.tradeid.ordercode.mailno.rescode.get.xy';
 const XY_APP_KEY = '34839810';
 const XY_ENTRY = 'https://www.goofish.com/';
 const XY_ORIGIN = 'https://www.goofish.com';
@@ -61,7 +73,8 @@ function normalizeXianyuOrders(d) {
       status: c.tradeStatusEnum || '',
       statusPrompt: head.statusViewMsg || '',
       amount: price,
-      trackingNumber: '', // 列表接口不含物流单号(仅"物流记录"跳转按钮)
+      // 列表接口不含物流单号(仅"物流记录"跳转按钮);搜索命中后由菜鸟接口回填(2026-11-01)
+      trackingNumber: '',
       orderTime: head.createTime || '',
       sellerName: seller.userNick || '',
       goods: [{
@@ -76,20 +89,24 @@ function normalizeXianyuOrders(d) {
   }).filter((o) => o.orderSn);
 }
 
-/** mtop 调用(含 token 轮换重试);返回成功响应的 json(调用方自行取 data) */
-async function callXianyuMtop(page, data) {
+/** mtop 调用(含 token 轮换重试);返回成功响应的 json(调用方自行取 data)
+ *  opts: { api, type, valueType } —— 不传即列表接口请求体;
+ *  轨迹接口按实测传 type=originaljson、valueType=''(不带该参数) */
+async function callXianyuMtop(page, data, opts = {}) {
+  const { api = XY_LIST_API, type = 'json', valueType = 'string' } = opts;
   let lastErr = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     const token = tokenFromCookies(await page.context().cookies('https://h5api.m.goofish.com/'));
     const t = String(Date.now());
     const sign = mtopSign(token, t, XY_APP_KEY, data);
-    const body = new URLSearchParams({
+    const form = {
       jsv: '2.7.2', appKey: XY_APP_KEY, t, sign, v: '1.0',
-      type: 'json', accountSite: 'xianyu', dataType: 'json', timeout: '20000',
-      api: 'mtop.idle.web.trade.bought.list', valueType: 'string',
-      sessionOption: 'AutoLoginOnly', data,
-    }).toString();
-    const r = await postFormInPage(page, XY_API, body);
+      type, accountSite: 'xianyu', dataType: 'json', timeout: '20000',
+      api, sessionOption: 'AutoLoginOnly', data,
+    };
+    if (valueType) form.valueType = valueType; // 列表=string(订单号防精度丢失);轨迹接口实测不带
+    const body = new URLSearchParams(form).toString();
+    const r = await postFormInPage(page, `${XY_GATEWAY}${api}/1.0/`, body);
     if (r.status === 401 || r.status === 403) {
       throw new ApiError(ErrorCode.AUTH_REQUIRED, '闲鱼登录态失效,请在 ERP 的 persistent 中登录 goofish.com 后重试');
     }
@@ -134,6 +151,39 @@ async function fetchXianyuPage(page, pageNumber) {
   return { orders, hasNext };
 }
 
+/** 查询单个订单的快递单号+物流轨迹(page 须已就位,与列表共用 goofish.com origin)
+ *  响应 data.detailViewList[] 每元素一包裹(多包裹取第一个,对齐 PDD 口径):
+ *    companyList[]={companyName,mailNo,...};detailList[] 为全量轨迹(时间升序)
+ *  未发货时 companyList/detailList 可能为空 → 返回全空值(不抛错) */
+async function fetchXianyuTracking(page, orderSn) {
+  const data = JSON.stringify({ tradeId: String(orderSn || '') }); // 订单号必须字符串(超 JS 安全整数)
+  const json = await callXianyuMtop(page, data, { api: XY_TRACE_API, type: 'originaljson', valueType: '' });
+  let d = json.data;
+  if (typeof d === 'string') { // 防御:个别网关版本会二次序列化(与 fetchXianyuPage 同款处理)
+    try { d = JSON.parse(d); } catch { d = null; }
+  }
+  const pkg = ((d && Array.isArray(d.detailViewList)) ? d.detailViewList : [])[0] || {};
+  const company = ((Array.isArray(pkg.companyList)) ? pkg.companyList : [])[0] || {};
+  const steps = (Array.isArray(pkg.detailList) ? pkg.detailList : [])
+    .map((s) => ({ acceptTime: s.ocurrTimeStr || s.time || '', remark: s.desc || '' }))
+    .reverse(); // 接口按时间升序返回,对齐 1688/PDD/淘宝口径(最新在前)
+  return {
+    trackingNumber: String(company.mailNo || ''),
+    companyName: company.companyName || '',
+    steps,
+  };
+}
+
+/** 拉取闲鱼订单物流轨迹(对齐 getTaobaoTrace:按订单号查询,无需先有快递单号)
+ *  返回 { steps: [{acceptTime, remark}](最新在前,与1688/PDD/淘宝一致), shippingName, trackingNumber }
+ *  未发货/暂无轨迹返回空 steps(不抛错,由调用方推进 last_trace_at 防空转) */
+async function getXianyuTrace(orderSn, account) {
+  return withPage(account, 'xianyu', XY_ENTRY, XY_ORIGIN, async (page) => {
+    const { trackingNumber, companyName, steps } = await fetchXianyuTracking(page, orderSn);
+    return { steps, shippingName: companyName, trackingNumber };
+  });
+}
+
 /** 订单列表;返回 { orders }(tab 统一折叠为 all);订单行带 account 标注 */
 async function listXianyuOrders({ tab = 'all', size = 30, account } = {}) {
   return withPage(account, 'xianyu', XY_ENTRY, XY_ORIGIN, async (page) => {
@@ -164,6 +214,14 @@ async function searchXianyuInAccount(orderSn, account) {
       const { orders, hasNext } = await fetchXianyuPage(page, pn);
       const hit = orders.find((o) => o.orderSn === sn);
       if (hit) {
+        // 命中后回填快递单号(列表接口不含物流信息;2026-11-01 新增菜鸟轨迹接口)
+        // 尽力而为:查询失败不阻断搜索结果,单号留空待后续物流同步/手动刷新补全
+        try {
+          const { trackingNumber } = await fetchXianyuTracking(page, sn);
+          hit.trackingNumber = trackingNumber;
+        } catch (e) {
+          logger.warn({ account, orderSn: sn, err: e?.message }, '[xianyu] 快递单号回填失败(不影响搜索结果)');
+        }
         // 对齐 searchPddOrder/searchAliOrder 返回结构
         // sellerName 一并带回(2026-10-27:手动录入采购单 auto 补全时回填 op_purchase_order.seller_name)
         return {
@@ -204,4 +262,4 @@ async function searchXianyuOrder(orderSn, accounts = []) {
   return { result: null };
 }
 
-export { listXianyuOrders, searchXianyuOrder };
+export { listXianyuOrders, searchXianyuOrder, getXianyuTrace };
