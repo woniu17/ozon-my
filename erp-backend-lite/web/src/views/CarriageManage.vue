@@ -627,7 +627,7 @@ async function openDetail(row) {
   detail.phone = '';
   detail.wechatNickname = '';
   detail.comment = '';
-  detail.containersCount = '';
+  detail.containersCount = '1'; // 默认 1(2026-11-06)
   detail.selectedContactConfigId = '';
   detail.editingContact = false; // 详情弹窗默认只读展示联系方式(2026-11-05)
   editPostings.dirty = false;
@@ -1495,6 +1495,13 @@ defineExpose({ refreshCurrent, listLoading });
           </p>
         </div>
 
+        <!-- 容器数(2026-11-06:默认1;移至货件列表上方、联系方式下方) -->
+        <div v-if="hasAction(detail.carriage, 'approve')" class="containers-field containers-row">
+          <span>容器数</span>
+          <input v-model="detail.containersCount" type="number" min="1" />
+          <span class="field-hint">信任验收按货位发运时填写</span>
+        </div>
+
         <!-- 货件列表(2026-10-30:图片 + 增删,new 状态可编辑) -->
         <div class="detail-section">
           <div class="detail-section-head">
@@ -1585,10 +1592,6 @@ defineExpose({ refreshCurrent, listLoading });
 
         <!-- 发运操作 -->
         <div class="detail-actions">
-          <label v-if="hasAction(detail.carriage, 'approve')" class="containers-field">
-            <span>容器数(信任验收按货位发运时填写)</span>
-            <input v-model="detail.containersCount" type="number" min="1" placeholder="可选" />
-          </label>
           <div class="spacer"></div>
           <button
             v-if="hasAction(detail.carriage, 'cancel')"
@@ -2364,6 +2367,9 @@ defineExpose({ refreshCurrent, listLoading });
   gap: 8px;
   font-size: 12px;
   color: var(--muted);
+}
+.containers-row {
+  margin: 12px 0 0;
 }
 .containers-field input {
   padding: 5px 8px;
