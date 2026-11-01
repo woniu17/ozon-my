@@ -1243,7 +1243,7 @@ h3 {
   white-space: pre;
 }
 
-/* ── 首页统计 ── */
+/* ── 上架统计 ── */
 .dash-cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
