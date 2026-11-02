@@ -104,6 +104,16 @@ function postingStatusText(p) {
   if (p?.operate_status) return p.operate_status;
   return ozonStatusLabel(p?.ozon_status);
 }
+// 2026-11-07:跨店大包已发出悬浮提示(来源发运单/状态/OGL 单号/加入时间)
+function crossShippedTitle(p) {
+  const s = p?.cross_store_shipped;
+  if (!s) return '';
+  const parts = [`已随发运单 ${s.carriageId} 发出`];
+  if (s.carriageStatus) parts.push(`状态 ${s.carriageStatus}`);
+  if (s.trackingNumber) parts.push(`OGL ${s.trackingNumber}`);
+  if (s.addedAt) parts.push(`加入 ${s.addedAt}`);
+  return parts.join('，');
+}
 function hasAction(c, action) {
   return Array.isArray(c?.available_actions) && c.available_actions.includes(action);
 }
@@ -1558,6 +1568,13 @@ defineExpose({ refreshCurrent, listLoading });
                     <span v-if="p.source === 'manual'" class="cross-tag block-tag" :title="p.store_id">{{ p.store_name || p.store_id }}·跨店</span>
                     <span v-else class="self-tag block-tag">本店</span>
                   </div>
+                  <!-- 2026-11-07:跨店大包已发出标注(manual=已随本发运单发出;ozon=已随其它大包发出,Ozon补登记) -->
+                  <div v-if="p.shipped_with_this_carriage" class="carriage-shipped-tags">
+                    <span class="tag tag-ok">✅ 已随本发运单发出</span>
+                  </div>
+                  <div v-else-if="p.cross_store_shipped" class="carriage-shipped-tags">
+                    <span class="tag tag-info" :title="crossShippedTitle(p)">📦 已随 {{ p.cross_store_shipped.carriageId }} 大包发出（Ozon 补登记）</span>
+                  </div>
                 </td>
                 <td>
                   <span class="posting-status" :class="(postingStatusMeta(p.operate_status) || {}).cls || 'st-muted'">
@@ -1834,6 +1851,10 @@ defineExpose({ refreshCurrent, listLoading });
                     <span class="mono">{{ p.posting_number }}</span>
                     <span v-if="p.source === 'manual'" class="cross-tag block-tag" :title="p.store_id">{{ p.store_name || p.store_id }}·跨店</span>
                     <span v-else class="self-tag block-tag">本店</span>
+                  </div>
+                  <!-- 2026-11-07:已随跨店大包发出(加入当前发运单 = Ozon 补登记) -->
+                  <div v-if="p.cross_store_shipped" class="carriage-shipped-tags">
+                    <span class="tag tag-info" :title="crossShippedTitle(p)">📦 已随 {{ p.cross_store_shipped.carriageId }} 大包发出（Ozon 补登记）</span>
                   </div>
                 </td>
                 <td>
@@ -2603,6 +2624,18 @@ defineExpose({ refreshCurrent, listLoading });
   margin-left: 0;
   margin-top: 4px;
   width: fit-content;
+}
+
+/* ── 跨店大包已发出标注(2026-11-07) ── */
+.carriage-shipped-tags {
+  margin-top: 4px;
+}
+.carriage-shipped-tags .tag {
+  font-size: 11px;
+  line-height: 16px;
+  padding: 1px 6px;
+  max-width: 260px;
+  white-space: normal;
 }
 
 /* ── 候选弹窗:本店/跨店 tabs + 跨店筛选(2026-11-02) ── */

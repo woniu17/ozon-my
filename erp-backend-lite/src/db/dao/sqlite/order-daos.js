@@ -1081,6 +1081,53 @@ function attachCarriageOglTracking(pkgRows) {
   }
 }
 
+// ── 跨店大包已发出识别:读时 join 派生(2026-11-07) ──
+// 货件"已随跨店大包发出" ⟺ op_carriage_posting 存在 source='manual' 的活跃行,
+// 且所属发运单(op_carriage_history.status)为 received/delivered/closed(已发出)。
+// 该标记用于:
+//   - 订单处理列表:显示"已随 xxx 大包发出"、隐藏发货倒计时(实际已交运)
+//   - 发运单货件列表:ozon 行标注"已随大包发出(Ozon 补登记)",manual 行标注"已随本发运单发出"
+function attachCrossStoreShippedFlags(pkgRows) {
+  if (!pkgRows.length) return;
+  const postingKeys = [...new Set(pkgRows.map((p) => `${p.storeId}|${p.postingNumber}`))];
+  if (!postingKeys.length) return;
+  let rows;
+  try {
+    rows = db.prepare(
+      `SELECT cp.store_id || '|' || cp.posting_number AS pkey,
+              cp.carriage_id AS carriageId,
+              ch.status AS carriageStatus,
+              ch.tracking_number AS tracking,
+              cp.added_at
+       FROM op_carriage_posting cp
+       -- 仅按 carriage_id 关联:发运单归属店铺(history.store_id)与跨店货件店铺(cp.store_id)不同
+       JOIN op_carriage_history ch ON ch.carriage_id = cp.carriage_id
+       WHERE cp.source = 'manual'
+         AND cp.removed_at IS NULL
+         AND ch.status IN ('received', 'delivered', 'closed')
+         AND (cp.store_id || '|' || cp.posting_number) IN (${postingKeys.map(() => '?').join(',')})
+       ORDER BY cp.added_at DESC`
+    ).all(...postingKeys);
+  } catch {
+    return; // 派生字段失败不影响列表主流程
+  }
+  const byKey = new Map();
+  for (const r of rows) {
+    // DESC 遍历后同键留最近一次加入的发运单
+    if (!byKey.has(r.pkey)) {
+      byKey.set(r.pkey, {
+        carriageId: Number(r.carriageId),
+        carriageStatus: r.carriageStatus || null,
+        trackingNumber: r.tracking || null,
+        addedAt: r.added_at || null,
+      });
+    }
+  }
+  for (const p of pkgRows) {
+    p.crossStoreShipped = byKey.get(`${p.storeId}|${p.postingNumber}`) || null;
+  }
+}
+
 function listPackages(filters = {}) {
   const page = Math.max(1, Number(filters.page) || 1);
   const pageSize = Math.min(100, Math.max(1, Number(filters.pageSize) || 20));
@@ -1141,6 +1188,8 @@ function listPackages(filters = {}) {
     for (const p of pkgRows) p.purchaseLinks = linksByPkg.get(p.id) || [];
     // OGL 集运仓快递单号:按"货件→发运"读时 join 派生(2026-11-06)
     attachCarriageOglTracking(pkgRows);
+    // 跨店大包已发出:按"货件→已完成大包"读时 join 派生(2026-11-07)
+    attachCrossStoreShippedFlags(pkgRows);
   }
   return {
     total,

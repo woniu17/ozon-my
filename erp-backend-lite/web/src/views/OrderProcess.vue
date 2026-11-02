@@ -3224,6 +3224,17 @@ function countdown(pkg) {
   return { overdue: diff < 0, text };
 }
 
+// 2026-11-07:跨店大包已发出悬浮提示(来源发运单/状态/OGL 单号)
+function crossStoreShippedTitle(pkg) {
+  const s = pkg?.crossStoreShipped;
+  if (!s) return '';
+  const parts = [`已随发运单 ${s.carriageId} 发出`];
+  if (s.carriageStatus) parts.push(`状态 ${s.carriageStatus}`);
+  if (s.trackingNumber) parts.push(`OGL ${s.trackingNumber}`);
+  if (s.addedAt) parts.push(`加入 ${s.addedAt}`);
+  return parts.join('，') + '；后续发运/打单均为 Ozon 补登记';
+}
+
 function purchaseTag(pkg) {
   if (pkg.purchaseStatus === 'none') return { cls: 'tag tag-mute', label: '未采购' };
   return { cls: 'tag tag-ok', label: '已采购' };
@@ -3900,6 +3911,8 @@ onUnmounted(() => {
                 <span v-if="globalSearch.active" class="tag" :class="operateTag(pkg).cls" style="margin-right: 4px" title="包裹所属状态">{{ operateTag(pkg).label }}</span>
                 <!-- Ozon状态展示原始值(如 awaiting_deliver),中文释义放悬浮提示 -->
                 <span class="tag mono" :class="pkg.ozonStatus === 'cancelled' ? 'tag-err' : 'tag-mute'" :title="ozonStatus(pkg.ozonStatus) + (pkg.substatus ? '(' + pkg.substatus + ')' : '')">{{ pkg.ozonStatus || '—' }}</span>
+                <!-- 跨店大包已发出(2026-11-07):已随跨店大包发出,后续发运/打单均为 Ozon 补登记 -->
+                <span v-if="pkg.crossStoreShipped" class="tag tag-info" style="margin-left: 4px" :title="crossStoreShippedTitle(pkg)">已随 {{ pkg.crossStoreShipped.carriageId }} 大包发出</span>
                 <span :class="purchaseTag(pkg).cls" style="margin-left: 4px">{{ purchaseTag(pkg).label }}</span>
                 <span v-if="arrivedTag(pkg)" :class="arrivedTag(pkg).cls" style="margin-left: 4px">{{ arrivedTag(pkg).label }}</span>
               </div>
@@ -3925,8 +3938,9 @@ onUnmounted(() => {
               <div class="sub">下单：{{ fmtTime(pkg.inProcessAt) }}<template v-if="weekdayCN(pkg.inProcessAt)">（{{ weekdayCN(pkg.inProcessAt) }}）</template></div>
               <div v-if="pkg.stockedAt" class="sub">入库：{{ fmtTime(pkg.stockedAt) }}<template v-if="weekdayCN(pkg.stockedAt)">（{{ weekdayCN(pkg.stockedAt) }}）</template></div>
               <!-- 已取消订单不再展示最迟/剩发/已超时(取消后无发货义务,倒计时无意义) -->
-              <div v-if="pkg.shipmentDate && !pkg.isShipped && pkg.ozonStatus !== 'cancelled'" class="sub">最迟：{{ fmtTime(pkg.shipmentDate) }}<template v-if="weekdayCN(pkg.shipmentDate)">（{{ weekdayCN(pkg.shipmentDate) }}）</template></div>
-              <div v-if="countdown(pkg) && !pkg.isShipped && pkg.ozonStatus !== 'cancelled'" class="sub" :class="countdown(pkg).overdue ? 'overdue' : 'countdown'">
+              <!-- 2026-11-07:已随跨店大包发出的订单也不再展示倒计时(实际已交运,当前发运为 Ozon 补登记) -->
+              <div v-if="pkg.shipmentDate && !pkg.isShipped && pkg.ozonStatus !== 'cancelled' && !pkg.crossStoreShipped" class="sub">最迟：{{ fmtTime(pkg.shipmentDate) }}<template v-if="weekdayCN(pkg.shipmentDate)">（{{ weekdayCN(pkg.shipmentDate) }}）</template></div>
+              <div v-if="countdown(pkg) && !pkg.isShipped && pkg.ozonStatus !== 'cancelled' && !pkg.crossStoreShipped" class="sub" :class="countdown(pkg).overdue ? 'overdue' : 'countdown'">
                 {{ countdown(pkg).overdue ? '已超时：' : '剩发：' }}{{ countdown(pkg).text }}
               </div>
               <!-- 打单时间:历史已交运数据 waybill_printed_at 已回填到 dispatched_at(两值相等),不再重复展示 -->

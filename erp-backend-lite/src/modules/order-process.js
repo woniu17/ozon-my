@@ -2210,6 +2210,76 @@ function buildManualPostingObjects(storeId, carriageId) {
   return postings;
 }
 
+// ── 跨店大包已发出标注(2026-11-07) ──
+// 货件"已随跨店大包发出" ⟺ op_carriage_posting 存在 source='manual' 活跃行,
+// 且所属发运单(op_carriage_history.status)为 received/delivered/closed(已发出)。
+// 用途:
+//   - 发运单货件列表:ozon 行标注 cross_store_shipped(已随其它大包发出,当前发运单为 Ozon 补登记);
+//     manual 行在所属发运单已完成时标注 shipped_with_this_carriage(已随本发运单发出)。
+//   - 待发运/跨店候选列表:标注 cross_store_shipped,供用户识别后加入新发运单做 Ozon 闭环。
+function attachCrossStoreShippedForPostings(postings, { currentStoreId, currentCarriageStatus, excludeCarriageId } = {}) {
+  if (!Array.isArray(postings) || !postings.length) return postings;
+  const keys = [...new Set(
+    postings
+      .map((p) => (p?.posting_number ? `${p.store_id || currentStoreId}|${p.posting_number}` : null))
+      .filter(Boolean)
+  )];
+  if (keys.length) {
+    const slots = keys.map(() => '?').join(',');
+    const whereParts = [
+      "cp.source = 'manual'",
+      'cp.removed_at IS NULL',
+      "ch.status IN ('received', 'delivered', 'closed')",
+      `(cp.store_id || '|' || cp.posting_number) IN (${slots})`,
+    ];
+    const whereArgs = [...keys];
+    // 查看发运单自身详情时,manual 行就是本发运单的记录,不应再标记"已随其它大包发出"
+    if (excludeCarriageId != null) {
+      whereParts.push('cp.carriage_id != ?');
+      whereArgs.push(Number(excludeCarriageId));
+    }
+    let rows = [];
+    try {
+      rows = db.prepare(
+        `SELECT cp.store_id || '|' || cp.posting_number AS pkey,
+                cp.carriage_id AS carriageId,
+                ch.status AS carriageStatus,
+                ch.tracking_number AS tracking,
+                cp.added_at
+         FROM op_carriage_posting cp
+         -- 仅按 carriage_id 关联:发运单归属店铺(history.store_id)与跨店货件店铺(cp.store_id)不同
+         JOIN op_carriage_history ch ON ch.carriage_id = cp.carriage_id
+         WHERE ${whereParts.join(' AND ')}
+         ORDER BY cp.added_at DESC`
+      ).all(...whereArgs);
+    } catch {
+      rows = [];
+    }
+    const byKey = new Map();
+    for (const r of rows) {
+      if (!byKey.has(r.pkey)) {
+        byKey.set(r.pkey, {
+          carriageId: Number(r.carriageId),
+          carriageStatus: r.carriageStatus || null,
+          trackingNumber: r.tracking || null,
+          addedAt: r.added_at || null,
+        });
+      }
+    }
+    for (const p of postings) {
+      const key = p?.posting_number ? `${p.store_id || currentStoreId}|${p.posting_number}` : null;
+      const flag = key ? byKey.get(key) : null;
+      if (flag) p.cross_store_shipped = flag;
+    }
+  }
+  if (currentCarriageStatus && ['received', 'delivered', 'closed'].includes(currentCarriageStatus)) {
+    for (const p of postings) {
+      if (p?.source === 'manual') p.shipped_with_this_carriage = true;
+    }
+  }
+  return postings;
+}
+
 // 快递员联系方式配置(2026-10-30,支持多条 + 默认项;2026-10-30 改为全店铺通用一份)
 // 全局 key: carriage_courier_contacts, value: [{ id, phone, wechatNickname, comment, isDefault }]
 // 兼容迁移:历史按店铺存的数组 key(carriage_courier_contacts:<storeId>)
@@ -2484,6 +2554,20 @@ router.post('/admin/api/order-process/carriage/posting-list', async (req, res) =
       r.postings = [...(r.postings || []), ...manualPostings];
       r.manual_count = manualPostings.length;
     }
+    // 2026-11-07:标注"已随跨店大包发出"(ozon 行补登记识别 / manual 行已随本发运单发出)
+    if (r?.postings?.length) {
+      const carriageStatusRow = db
+        .prepare('SELECT status FROM op_carriage_history WHERE store_id = ? AND carriage_id = ?')
+        .get(store.id, Number(carriageId));
+      for (const p of r.postings) {
+        if (!p.store_id) p.store_id = store.id;
+      }
+      attachCrossStoreShippedForPostings(r.postings, {
+        currentStoreId: store.id,
+        currentCarriageStatus: carriageStatusRow?.status || null,
+        excludeCarriageId: Number(carriageId),
+      });
+    }
     // 2026-11-01:货件快照写回本地历史(发运完成后 Ozon 查不到)
     if (r?.postings) {
       updateCarriageHistoryJson(store.id, carriageId, {
@@ -2529,6 +2613,8 @@ router.post('/admin/api/order-process/carriage/pending-postings', async (req, re
       attachPostingProductImages(store.id, postings);
       attachPostingShipmentDates(store.id, postings);
     }
+    // 2026-11-07:标注"已随跨店大包发出"(Ozon 补登记识别,不排除)
+    attachCrossStoreShippedForPostings(postings, { currentStoreId: store.id });
     res.json(ok({ postings, count: postings.length }));
   } catch (e) { carriageHandleError(e, req, res, '获取待发运货件'); }
 });
@@ -2634,6 +2720,8 @@ router.post('/admin/api/order-process/carriage/available-postings', async (req, 
       if (guard > 50) break; // 防死循环(最多 5000 条)
     } while (cursor);
     if (candidates.length) attachPostingProductImages(store.id, candidates);
+    // 2026-11-07:标注"已随跨店大包发出"(Ozon 补登记识别,不排除)
+    attachCrossStoreShippedForPostings(candidates, { currentStoreId: store.id });
     res.json(ok({ postings: candidates, count: candidates.length }));
   } catch (e) { carriageHandleError(e, req, res, '获取可加入货件'); }
 });
@@ -2726,6 +2814,8 @@ router.post('/admin/api/order-process/carriage/mixed-candidates', async (req, re
       products: [],
     }));
     hydrateLocalPostings(postings);
+    // 2026-11-07:标注"已随跨店大包发出"(供用户识别后加入新发运单做 Ozon 补登记,不排除)
+    attachCrossStoreShippedForPostings(postings, { currentStoreId: store.id });
     res.json(ok({ postings, count: postings.length }));
   } catch (e) { carriageHandleError(e, req, res, '获取跨店待发运货件'); }
 });
@@ -2762,6 +2852,12 @@ router.post('/admin/api/order-process/carriage/mixed/add', async (req, res) => {
         { storeId: store.id, carriageId: Number(carriageId), added: added.length, skipped: skipped.length },
         '[order-process] 添加跨店货件成功'
       );
+      // 2026-11-07:为已加入货件附加"已随跨店大包发出"标记(前端提示 Ozon 补登记用)
+      const addedPostings = added.map((it) => ({ store_id: it.storeId, posting_number: it.postingNumber }));
+      attachCrossStoreShippedForPostings(addedPostings, { currentStoreId: store.id });
+      for (let i = 0; i < added.length; i++) {
+        added[i].crossStoreShipped = addedPostings[i]?.cross_store_shipped || null;
+      }
     }
     res.json(ok({ added, skipped, addedCount: added.length, skippedCount: skipped.length }));
   } catch (e) { carriageHandleError(e, req, res, '添加跨店货件'); }
