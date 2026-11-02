@@ -134,16 +134,15 @@
           </view>
         </view>
 
-        <!-- OGL 拆包省钱提示(2026-11):同 SKU 多件订单拆包更省,点击进详情看公式 -->
+        <!-- OGL 运费/拆包提示(2026-11):所有 OGL 订单展示运费,可拆订单对比拆包省/贵 -->
         <view
           v-if="pkg.splitAnalysis?.applicable"
           class="split-save-bar"
-          :class="{ passive: !pkg.splitAnalysis.operable }"
+          :class="'split-' + splitCls(pkg)"
           @click.stop="goDetail(pkg)"
         >
-          <text class="split-save-text">拆{{ pkg.splitAnalysis.packagesCount }}包省 <text class="split-save-amt">¥{{ fmtMoney(pkg.splitAnalysis.saveCny) }}</text></text>
-          <text v-if="!pkg.splitAnalysis.operable" class="split-save-note">已发货</text>
-          <text v-else class="split-save-note active">可拆包</text>
+          <text class="split-save-text">{{ splitText(pkg) }}</text>
+          <text class="split-save-note" :class="{ active: splitNoteActive(pkg) }">{{ splitNote(pkg) }}</text>
         </view>
 
         <!-- 时间行:未交运(有最迟发货时间且非取消)展示下单/最迟/剩发,有利润时显示预估利润 -->
@@ -389,6 +388,32 @@ function profitClass(pkg) {
   if (v > 0) return 'profit-pos';
   if (v < 0) return 'profit-neg';
   return 'muted';
+}
+
+// ── OGL 运费/拆包提示(2026-11):所有 OGL 订单展示整件运费,可拆订单对比拆包省/贵 ──
+function splitCls(pkg) {
+  const sa = pkg.splitAnalysis;
+  if (!sa || !sa.splitEligible) return 'info';
+  return sa.saving ? 'save' : 'worse';
+}
+function splitText(pkg) {
+  const sa = pkg.splitAnalysis;
+  if (!sa) return '';
+  if (!sa.splitEligible) return `整件运费 ¥${fmtMoney(sa.whole?.deliveryCny)}`;
+  if (sa.saving) return `拆${sa.packagesCount}包省 ¥${fmtMoney(sa.saveCny)}`;
+  return `整件更省 · 拆${sa.packagesCount}包贵 ¥${fmtMoney(Math.abs(sa.saveCny))}`;
+}
+function splitNote(pkg) {
+  const sa = pkg.splitAnalysis;
+  if (!sa) return '';
+  if (!sa.splitEligible) {
+    return sa.reason === 'single_unit' ? '单件' : sa.reason === 'multi_sku' ? '多SKU' : sa.reason === 'too_many_units' ? '件数过多' : '不可拆';
+  }
+  return sa.operable ? '可拆包' : '已发货';
+}
+function splitNoteActive(pkg) {
+  const sa = pkg.splitAnalysis;
+  return !!(sa && sa.splitEligible && sa.operable);
 }
 // 每秒刷新的当前时间(驱动所有卡片剩发倒计时秒级跳动)
 const nowTs = ref(Date.now());
@@ -1045,28 +1070,39 @@ onReachBottom(async () => {
   color: #a6abb3;
 }
 
-/* OGL 拆包省钱提示(2026-11) */
+/* OGL 运费/拆包提示(2026-11):绿=拆包省,橙=拆包贵,灰=不可拆只展示整件 */
 .split-save-bar {
   margin-top: 14rpx;
   padding: 10rpx 16rpx;
   border-radius: 10rpx;
-  background: #e8ffea;
-  border: 1rpx solid #b7f0c0;
   display: flex;
   align-items: center;
 }
-.split-save-bar.passive {
-  background: #f4faf5;
-  border-color: #d8e6da;
+.split-save-bar.split-save {
+  background: #e8ffea;
+  border: 1rpx solid #b7f0c0;
+}
+.split-save-bar.split-worse {
+  background: #fff7ed;
+  border: 1rpx solid #fed7aa;
+}
+.split-save-bar.split-info {
+  background: #f4f5f7;
+  border: 1rpx solid #e5e6eb;
 }
 .split-save-text {
   font-size: 24rpx;
-  color: #0b7a2d;
   font-weight: 600;
   flex: 1;
 }
-.split-save-amt {
-  font-weight: 800;
+.split-save-bar.split-save .split-save-text {
+  color: #0b7a2d;
+}
+.split-save-bar.split-worse .split-save-text {
+  color: #d97706;
+}
+.split-save-bar.split-info .split-save-text {
+  color: #4e5969;
 }
 .split-save-note {
   font-size: 20rpx;
@@ -1075,9 +1111,13 @@ onReachBottom(async () => {
   border-radius: 999rpx;
   background: #f2f3f5;
 }
-.split-save-note.active {
+.split-save-bar.split-save .split-save-note.active {
   color: #0b7a2d;
   background: #d3f5d9;
+}
+.split-save-bar.split-worse .split-save-note.active {
+  color: #d97706;
+  background: #ffedd5;
 }
 
 /* 时间行(未交运包裹:下单/最迟/剩发) */

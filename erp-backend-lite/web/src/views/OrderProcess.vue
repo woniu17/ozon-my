@@ -2966,16 +2966,75 @@ function othersTitle(pkg) {
   if (pkg.accrual) return `其它费用(代理佣金/星星商品/逆向物流等)${fmtRub(pkg.accrual.othersRub)} × 汇率 ${pkg.accrual.rate}`;
   return '无应计数据(未妥投或 Ozon 未生成)';
 }
-// OGL 拆包省钱悬浮:不拆/拆包完整公式 + 是否仍可操作
+// ── OGL 运费/拆包分析展示(2026-11):三种结论——拆包省钱 / 整件更省 / 不可拆只展示整件 ──
+function splitAnalysisCls(pkg) {
+  const sa = pkg.splitAnalysis;
+  if (!sa) return '';
+  if (!sa.splitEligible) return 'split-save-info';
+  return sa.saving ? 'split-save-save' : 'split-save-worse';
+}
+function splitAnalysisLabel(pkg) {
+  const sa = pkg.splitAnalysis;
+  if (!sa) return '';
+  if (!sa.splitEligible) return '整件运费';
+  if (sa.saving) return sa.operable ? '💡拆包省钱' : '拆包省钱';
+  return '整件更省';
+}
+function splitAnalysisText(pkg) {
+  const sa = pkg.splitAnalysis;
+  if (!sa) return '';
+  if (!sa.splitEligible) return fmtMoney(sa.whole?.deliveryCny);
+  if (sa.saving) return `拆${sa.packagesCount}包省 ¥${fmtMoney(sa.saveCny)}`;
+  return `拆${sa.packagesCount}包贵 ¥${fmtMoney(Math.abs(sa.saveCny))}`;
+}
+// OGL 运费悬浮:整件/拆包完整公式 + 结论 + 是否仍可操作
 function splitAnalysisTitle(pkg) {
   const sa = pkg.splitAnalysis;
   if (!sa?.applicable) return '';
   const lines = [];
   lines.push(`不拆(整件 ${sa.whole.groupName}): ${sa.whole.formula}`);
-  lines.push(`拆 ${sa.packagesCount} 包: ${sa.formula}`);
-  lines.push(`可省 ¥${fmtMoney(sa.saveCny)}`);
-  lines.push(sa.operable ? '当前状态仍可拆包(发货前),建议拆包发货' : '已发货/交运,无法再拆(仅参考)');
-  return lines.join('\n');
+  if (sa.splitEligible) {
+    lines.push(`拆 ${sa.packagesCount} 包: ${sa.formula}`);
+    lines.push(sa.saving
+      ? `可省 ¥${fmtMoney(sa.saveCny)},建议拆包`
+      : `拆包反而贵 ¥${fmtMoney(Math.abs(sa.saveCny))},建议整件发出`);
+    lines.push(sa.operable ? '当前状态仍可拆包(发货前)' : '已发货/交运,无法再拆(仅参考)');
+  } else {
+    lines.push(sa.reason === 'single_unit' ? '单件订单,无拆包空间'
+      : sa.reason === 'multi_sku' ? '多 SKU 订单,暂不分析拆包'
+      : sa.reason === 'too_many_units' ? '件数过多,暂不分析拆包' : '');
+  }
+  return lines.filter(Boolean).join('\n');
+}
+// 详情卡片状态标签(可拆包/已发货/单件/多SKU)
+function splitDetailStatusLabel(pkg) {
+  const sa = pkg.splitAnalysis;
+  if (!sa) return '';
+  if (!sa.splitEligible) {
+    return sa.reason === 'single_unit' ? '单件' : sa.reason === 'multi_sku' ? '多SKU' : sa.reason === 'too_many_units' ? '件数过多' : '不可拆';
+  }
+  return sa.operable ? '可拆包' : '已发货';
+}
+function splitDetailStatusCls(pkg) {
+  const sa = pkg.splitAnalysis;
+  if (!sa) return '';
+  if (!sa.splitEligible) return 'tag-mute';
+  return sa.operable ? 'tag-info' : 'tag-mute';
+}
+// 详情卡片结论标签(省/贵/整件运费)
+function splitDetailConclusionLabel(pkg) {
+  const sa = pkg.splitAnalysis;
+  if (!sa) return '';
+  if (!sa.splitEligible) return `整件运费 ¥${fmtMoney(sa.whole?.deliveryCny)}`;
+  return sa.saving
+    ? `拆${sa.packagesCount}包可省 ¥${fmtMoney(sa.saveCny)}`
+    : `拆${sa.packagesCount}包贵 ¥${fmtMoney(Math.abs(sa.saveCny))},建议整件`;
+}
+function splitDetailConclusionCls(pkg) {
+  const sa = pkg.splitAnalysis;
+  if (!sa) return '';
+  if (!sa.splitEligible) return 'tag-mute';
+  return sa.saving ? 'split-tag-save' : 'split-tag-worse';
 }
 
 function profitLabel(pkg) {
@@ -3916,10 +3975,10 @@ onUnmounted(() => {
               <div class="amt-row sub" :title="weightTitle(pkg)"><span class="amt-name">{{ weightLabel(pkg) }}</span><span class="amt-val" :class="{ muted: pkg.weightG == null }">{{ pkg.weightG != null ? Math.floor(pkg.weightG) + 'g' : '—' }}</span></div>
               <!-- 重量(估):由实际配送费反推(整数 g) -->
               <div class="amt-row sub muted" :title="weightTitle(pkg)"><span class="amt-name">重量(估)</span><span class="amt-val" :class="{ muted: pkg.accrual?.derivedWeight == null }">{{ pkg.accrual?.derivedWeight != null ? pkg.accrual.derivedWeight + 'g' : '—' }}</span></div>
-              <!-- OGL 拆包省钱提示(2026-11):同 SKU 多件,拆包后总运费更低 -->
-              <div v-if="pkg.splitAnalysis?.applicable" class="amt-row split-save-row" :class="{ 'split-save-passive': !pkg.splitAnalysis.operable }" :title="splitAnalysisTitle(pkg)">
-                <span class="amt-name split-save-name">{{ pkg.splitAnalysis.operable ? '💡拆包省钱' : '拆包省钱' }}</span>
-                <span class="amt-val split-save-val">拆{{ pkg.splitAnalysis.packagesCount }}包省 ¥{{ fmtMoney(pkg.splitAnalysis.saveCny) }}</span>
+              <!-- OGL 运费/拆包提示(2026-11):所有 OGL 订单展示整件运费,可拆订单对比拆包省/贵 -->
+              <div v-if="pkg.splitAnalysis?.applicable" class="amt-row split-save-row" :class="splitAnalysisCls(pkg)" :title="splitAnalysisTitle(pkg)">
+                <span class="amt-name split-save-name">{{ splitAnalysisLabel(pkg) }}</span>
+                <span class="amt-val split-save-val">{{ splitAnalysisText(pkg) }}</span>
               </div>
               <!-- 其它费用:代理佣金/星星商品/逆向物流等,= 应计合计 − 销售佣金 − 配送 -->
               <div class="amt-row sub" :title="othersTitle(pkg)"><span class="amt-name">其它费用</span><span class="amt-val" :class="{ muted: !pkg.accrual }">{{ pkg.accrual ? fmtMoney(pkg.accrual.others) : '—' }}</span></div>
@@ -4708,37 +4767,39 @@ onUnmounted(() => {
           </tbody>
         </table>
 
-        <!-- OGL 拆包省钱分析(2026-11):同 SKU 多件订单,拆包 vs 不拆运费公式对比 -->
+        <!-- OGL 运费/拆包分析(2026-11):所有 OGL 订单展示运费,可拆订单对比拆包省/贵 -->
         <div v-if="detail.package.splitAnalysis?.applicable" class="detail-section">
           <div class="detail-section-title">
-            OGL 运费拆包分析
+            OGL 运费分析
             <span
               class="tag"
-              :class="detail.package.splitAnalysis.operable ? 'tag-info' : 'tag-mute'"
-              :title="detail.package.splitAnalysis.operable ? '当前仍处于发货前,可拆包操作' : '已发货/交运,无法再拆(仅供参考)'"
-            >{{ detail.package.splitAnalysis.operable ? '可拆包' : '已发货' }}</span>
-            <span class="tag" style="background:#ecfdf5;color:#16a34a;border-color:#16a34a">拆{{ detail.package.splitAnalysis.packagesCount }}包可省 ¥{{ fmtMoney(detail.package.splitAnalysis.saveCny) }}</span>
+              :class="splitDetailStatusCls(detail.package)"
+              :title="splitAnalysisTitle(detail.package)"
+            >{{ splitDetailStatusLabel(detail.package) }}</span>
+            <span class="tag" :class="splitDetailConclusionCls(detail.package)">{{ splitDetailConclusionLabel(detail.package) }}</span>
           </div>
           <div class="split-analysis-body">
             <div class="split-compare">
               <div class="split-col split-col-whole">
-                <div class="split-col-title">不拆(整件)</div>
+                <div class="split-col-title">整件(不拆)</div>
                 <div class="split-col-group">{{ detail.package.splitAnalysis.whole.groupName }} 档 · {{ detail.package.splitAnalysis.whole.weightG }}g · 申报 ¥{{ detail.package.splitAnalysis.whole.valueCny }}</div>
                 <div class="mono">{{ detail.package.splitAnalysis.whole.formula }}</div>
               </div>
-              <div class="split-arrow">→</div>
-              <div class="split-col split-col-best">
-                <div class="split-col-title">最优拆 {{ detail.package.splitAnalysis.packagesCount }} 包</div>
-                <div
-                  v-for="(p, i) in detail.package.splitAnalysis.best.packages"
-                  :key="i"
-                  class="split-pkg-line"
-                >
-                  <span class="split-pkg-name">包{{ i + 1 }}·{{ p.units }}件({{ p.weightG }}g, ¥{{ p.valueCny }})</span>
-                  <span class="mono split-pkg-formula">{{ p.groupName }}档 · {{ p.formula }}</span>
+              <template v-if="detail.package.splitAnalysis.splitEligible">
+                <div class="split-arrow">→</div>
+                <div class="split-col split-col-best">
+                  <div class="split-col-title">最优拆 {{ detail.package.splitAnalysis.packagesCount }} 包</div>
+                  <div
+                    v-for="(p, i) in detail.package.splitAnalysis.best.packages"
+                    :key="i"
+                    class="split-pkg-line"
+                  >
+                    <span class="split-pkg-name">包{{ i + 1 }}·{{ p.units }}件({{ p.weightG }}g, ¥{{ p.valueCny }})</span>
+                    <span class="mono split-pkg-formula">{{ p.groupName }}档 · {{ p.formula }}</span>
+                  </div>
+                  <div class="split-pkg-total mono">合计: {{ detail.package.splitAnalysis.formula }}</div>
                 </div>
-                <div class="split-pkg-total mono">合计: {{ detail.package.splitAnalysis.formula }}</div>
-              </div>
+              </template>
             </div>
           </div>
         </div>
@@ -5347,25 +5408,34 @@ a.product-title:hover {
   white-space: nowrap;
 }
 
-/* OGL 拆包省钱提示行(2026-11):绿色=仍可操作,灰绿=已发货仅参考 */
+/* OGL 运费/拆包提示行(2026-11):绿=拆包省,橙=拆包贵,灰=不可拆只展示整件 */
 .split-save-row {
   align-items: center;
   margin-top: 2px;
 }
 .split-save-name {
-  color: #16a34a;
   font-weight: 600;
 }
 .split-save-val {
-  color: #16a34a;
   font-weight: 700;
 }
-.split-save-passive .split-save-name,
-.split-save-passive .split-save-val {
-  color: #86b78e;
+.split-save-save .split-save-name,
+.split-save-save .split-save-val {
+  color: #16a34a;
 }
-.split-save-passive .split-save-val {
-  font-weight: 500;
+.split-save-worse .split-save-name,
+.split-save-worse .split-save-val {
+  color: #d97706;
+}
+.split-save-worse .split-save-val {
+  font-weight: 600;
+}
+.split-save-info .split-save-name,
+.split-save-info .split-save-val {
+  color: #6b7280;
+}
+.split-save-info .split-save-val {
+  font-weight: 600;
 }
 
 /* 详情弹窗 OGL 拆包分析(2026-11) */
@@ -5424,6 +5494,18 @@ a.product-title:hover {
   color: #16a34a;
   font-weight: 700;
   font-size: 13px;
+}
+
+/* 详情卡片结论标签:绿=省,橙=贵 */
+.split-tag-save {
+  background: #ecfdf5;
+  color: #16a34a;
+  border-color: #16a34a;
+}
+.split-tag-worse {
+  background: #fff7ed;
+  color: #d97706;
+  border-color: #d97706;
 }
 
 /* 采购信息列:参考产品信息列 product-item 结构,展示采购商品图/名称/规格/价格×数量 */

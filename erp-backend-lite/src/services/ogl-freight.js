@@ -97,21 +97,28 @@ export const OGL_SPLIT_OPERABLE_STATUSES = new Set([
   'wait_dispatch',
 ]);
 
-/** 单一 SKU 拆包分析
+/** OGL 运费/拆包分析(2026-11)
+ * 对 OGL(ozon_outsourced)订单估算整件运费;同 SKU 多件订单额外枚举整数拆包,
+ * 给出「拆包更省 / 整件更省 / 不可拆」的完整结论,供三端列表/详情展示。
  * @param {object} p
  * @param {string}  [p.tplIntegrationType]  Ozon 配送集成类型;非 'ozon_outsourced' 不适用
  * @param {number}  [p.orderAmountCny]      整件申报价值(CNY)
  * @param {number}  [p.weightG]             整件打单重量(克)
+ * @param {boolean} [p.multiSku]            是否多 SKU(多 SKU 不做拆包枚举)
  * @param {number}  [p.unitQuantity]        同 SKU 总件数(N)
  * @param {number}  [p.unitPriceCny]        单件申报价值(CNY)
  * @param {string}  [p.operateStatus]       本地流转状态(判定是否仍可拆包)
  * @param {number}  [p.maxUnits=20]         最大件数上限,超限不做(拆分枚举开销)
- * @returns {object} 不适用返回 {applicable:false, reason};适用返回 {applicable:true, ...}
+ * @returns {object}
+ *   {applicable:false, reason}  非 OGL/缺数据/超费率范围,不展示
+ *   {applicable:true, splitEligible:false, reason, whole, ...}  单件/多SKU等,只展示整件运费
+ *   {applicable:true, splitEligible:true, saving, best, whole, saveCny, ...}  同SKU多件,给出拆包结论
  */
 export function analyzeOglSplit({
   tplIntegrationType,
   orderAmountCny,
   weightG,
+  multiSku = false,
   unitQuantity,
   unitPriceCny,
   operateStatus,
@@ -123,14 +130,27 @@ export function analyzeOglSplit({
   const unitV = Number(unitPriceCny);
   if (tplIntegrationType !== 'ozon_outsourced') return { applicable: false, reason: 'not_ogl' };
   if (!Number.isFinite(v) || v <= 0 || !Number.isFinite(w) || w <= 0) return { applicable: false, reason: 'no_weight_or_amount' };
-  if (!Number.isFinite(n) || n <= 1) return { applicable: false, reason: 'single_unit' };
-  if (n > maxUnits) return { applicable: false, reason: 'too_many_units' };
-  if (!Number.isFinite(unitV) || unitV <= 0) return { applicable: false, reason: 'no_unit_price' };
-
-  const unitW = w / n; // 单件重量(克,可为小数)
   const operable = OGL_SPLIT_OPERABLE_STATUSES.has(operateStatus);
   const whole = estimateOglFreight({ valueCny: v, weightG: w });
   if (!whole?.deliveryCny) return { applicable: false, reason: 'whole_out_of_tariff' };
+
+  const wholeInfo = buildSplitWhole(whole, v, w);
+
+  // 不可拆:多 SKU / 单件 / 超限 / 无单价 → 只提供整件运费
+  if (multiSku) {
+    return { applicable: true, splitEligible: false, reason: 'multi_sku', operable: false, whole: wholeInfo };
+  }
+  if (!Number.isFinite(n) || n <= 1) {
+    return { applicable: true, splitEligible: false, reason: 'single_unit', operable: false, whole: wholeInfo };
+  }
+  if (n > maxUnits) {
+    return { applicable: true, splitEligible: false, reason: 'too_many_units', operable, whole: wholeInfo };
+  }
+  if (!Number.isFinite(unitV) || unitV <= 0) {
+    return { applicable: true, splitEligible: false, reason: 'no_unit_price', operable, whole: wholeInfo };
+  }
+
+  const unitW = w / n; // 单件重量(克,可为小数)
 
   // 枚举整数件拆分,求运费最低拆法
   const compositions = [];
@@ -175,24 +195,19 @@ export function analyzeOglSplit({
     }
   }
 
-  if (!best || best.saveCny <= 0) {
-    return {
-      applicable: false,
-      reason: 'no_saving',
-      whole: buildSplitWhole(whole, v, w),
-      operable,
-    };
-  }
-
+  const saving = !!best && best.saveCny > 0;
   return {
     applicable: true,
+    splitEligible: true,
     operable,
     operateStatus: operateStatus || null,
-    whole: buildSplitWhole(whole, v, w),
-    best,
-    saveCny: best.saveCny,
-    packagesCount: best.packages.length,
-    formula: best.packages.map((p, i) => `包${i + 1} ${p.formula}`).join(' ＋ ') + ` = ¥${best.totalCny.toFixed(2)}`,
+    reason: null,
+    whole: wholeInfo,
+    best: best || null,
+    saving,
+    saveCny: best ? best.saveCny : null,
+    packagesCount: best ? best.packages.length : null,
+    formula: best ? best.packages.map((p, i) => `包${i + 1} ${p.formula}`).join(' ＋ ') + ` = ¥${best.totalCny.toFixed(2)}` : null,
   };
 }
 

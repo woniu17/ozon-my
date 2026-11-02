@@ -80,27 +80,29 @@
       </view>
     </view>
 
-    <!-- OGL 拆包省钱分析(2026-11):同 SKU 多件订单,拆包 vs 不拆运费公式对比 -->
-    <view v-if="pkg.splitAnalysis?.applicable" class="card split-analysis-card">
+    <!-- OGL 运费/拆包分析(2026-11):所有 OGL 订单展示整件运费,可拆订单对比拆包省/贵 -->
+    <view v-if="pkg.splitAnalysis?.applicable" class="card split-analysis-card" :class="'split-card-' + detailSplitCls(pkg)">
       <view class="section-title">
-        OGL 运费拆包分析
-        <text class="split-status" :class="{ active: pkg.splitAnalysis.operable }">{{ pkg.splitAnalysis.operable ? '可拆包' : '已发货' }}</text>
+        OGL 运费分析
+        <text class="split-status" :class="detailSplitStatusCls(pkg)">{{ detailSplitStatusLabel(pkg) }}</text>
       </view>
       <view class="split-save-head">
-        <text class="split-save-big">拆{{ pkg.splitAnalysis.packagesCount }}包可省 ¥{{ fmtMoney(pkg.splitAnalysis.saveCny) }}</text>
+        <text class="split-save-big" :class="'split-big-' + detailSplitCls(pkg)">{{ detailSplitConclusion(pkg) }}</text>
       </view>
       <view class="split-block whole">
-        <view class="split-block-title">不拆(整件) · {{ pkg.splitAnalysis.whole.groupName }}档</view>
+        <view class="split-block-title">整件(不拆) · {{ pkg.splitAnalysis.whole.groupName }}档</view>
         <view class="split-formula">{{ pkg.splitAnalysis.whole.formula }}</view>
       </view>
-      <view class="split-block best">
-        <view class="split-block-title">最优拆 {{ pkg.splitAnalysis.packagesCount }}包</view>
-        <view v-for="(p, i) in pkg.splitAnalysis.best.packages" :key="i" class="split-pkg">
-          <view class="split-pkg-head">包{{ i + 1 }} · {{ p.units }}件({{ p.weightG }}g, ¥{{ p.valueCny }}) · {{ p.groupName }}档</view>
-          <view class="split-formula">{{ p.formula }}</view>
+      <template v-if="pkg.splitAnalysis.splitEligible">
+        <view class="split-block best">
+          <view class="split-block-title">最优拆 {{ pkg.splitAnalysis.packagesCount }}包</view>
+          <view v-for="(p, i) in pkg.splitAnalysis.best.packages" :key="i" class="split-pkg">
+            <view class="split-pkg-head">包{{ i + 1 }} · {{ p.units }}件({{ p.weightG }}g, ¥{{ p.valueCny }}) · {{ p.groupName }}档</view>
+            <view class="split-formula">{{ p.formula }}</view>
+          </view>
+          <view class="split-total">合计: {{ pkg.splitAnalysis.formula }}</view>
         </view>
-        <view class="split-total">合计: {{ pkg.splitAnalysis.formula }}</view>
-      </view>
+      </template>
     </view>
 
     <!-- 产品行 -->
@@ -399,6 +401,33 @@ function profitClass(p) {
   if (v > 0) return 'profit-pos';
   if (v < 0) return 'profit-neg';
   return 'muted';
+}
+
+// ── OGL 运费/拆包分析展示(2026-11):三种结论——拆包省钱/整件更省/不可拆只展示整件 ──
+function detailSplitCls(pkg) {
+  const sa = pkg?.splitAnalysis;
+  if (!sa || !sa.splitEligible) return 'info';
+  return sa.saving ? 'save' : 'worse';
+}
+function detailSplitStatusLabel(pkg) {
+  const sa = pkg?.splitAnalysis;
+  if (!sa) return '';
+  if (!sa.splitEligible) {
+    return sa.reason === 'single_unit' ? '单件' : sa.reason === 'multi_sku' ? '多SKU' : sa.reason === 'too_many_units' ? '件数过多' : '不可拆';
+  }
+  return sa.operable ? '可拆包' : '已发货';
+}
+function detailSplitStatusCls(pkg) {
+  const sa = pkg?.splitAnalysis;
+  if (!sa || !sa.splitEligible) return '';
+  return sa.operable ? 'active' : '';
+}
+function detailSplitConclusion(pkg) {
+  const sa = pkg?.splitAnalysis;
+  if (!sa) return '';
+  if (!sa.splitEligible) return `整件运费 ¥${fmtMoney(sa.whole?.deliveryCny)}`;
+  if (sa.saving) return `拆${sa.packagesCount}包可省 ¥${fmtMoney(sa.saveCny)}`;
+  return `拆${sa.packagesCount}包贵 ¥${fmtMoney(Math.abs(sa.saveCny))},建议整件`;
 }
 
 // ── 商品行单件口径(2026-10-13:采购分摊按 itemId 聚合,与采购页一致)────────
@@ -991,10 +1020,18 @@ onShow(() => {
   margin-bottom: 16rpx;
 }
 
-/* OGL 拆包省钱分析(2026-11) */
-.split-analysis-card {
+/* OGL 运费/拆包分析(2026-11):绿=拆包省,橙=拆包贵,灰=不可拆只展示整件 */
+.split-analysis-card.split-card-save {
   border: 1rpx solid #b7f0c0;
   background: #f8fef9;
+}
+.split-analysis-card.split-card-worse {
+  border: 1rpx solid #fed7aa;
+  background: #fffaf5;
+}
+.split-analysis-card.split-card-info {
+  border: 1rpx solid #e5e6eb;
+  background: #fafbfc;
 }
 .split-status {
   margin-left: 12rpx;
@@ -1015,7 +1052,15 @@ onShow(() => {
 .split-save-big {
   font-size: 30rpx;
   font-weight: 800;
+}
+.split-big-save {
   color: #0b7a2d;
+}
+.split-big-worse {
+  color: #d97706;
+}
+.split-big-info {
+  color: #4e5969;
 }
 .split-block {
   border-radius: 12rpx;
