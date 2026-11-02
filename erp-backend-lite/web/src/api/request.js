@@ -35,12 +35,15 @@ export async function request(path, options = {}) {
   const refreshed = res.headers.get('X-Refreshed-Token');
   if (refreshed) localStorage.setItem(TOKEN_KEY, refreshed);
 
-  // 401:清登录态 + 全局登出事件
+  // 401:仅当请求确实携带了 token 时才判定"登录过期"并清登录态;
+  // 未带 token 的 401(后台残留标签/未登录请求)不触发全局登出,避免误删其他同源标签页的共享登录态
   if (res.status === 401) {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(USER_KEY);
-    window.dispatchEvent(new CustomEvent('auth:logout'));
-    throw new Error('登录已过期,请重新登录');
+    if (token) {
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(USER_KEY);
+      window.dispatchEvent(new CustomEvent('auth:logout'));
+    }
+    throw new Error(token ? '登录已过期,请重新登录' : '登录状态无效,请重新登录');
   }
 
   // 解析响应体(容错:非 JSON 时 data 为 null)
@@ -93,10 +96,13 @@ export async function postBlob(path, body) {
   if (refreshed) localStorage.setItem(TOKEN_KEY, refreshed);
 
   if (res.status === 401) {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(USER_KEY);
-    window.dispatchEvent(new CustomEvent('auth:logout'));
-    throw new Error('登录已过期,请重新登录');
+    // 与统一封装一致:仅请求确实携带 token 时才清登录态,避免后台无 token 请求误删共享登录态
+    if (token) {
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(USER_KEY);
+      window.dispatchEvent(new CustomEvent('auth:logout'));
+    }
+    throw new Error(token ? '登录已过期,请重新登录' : '登录状态无效,请重新登录');
   }
 
   if (!res.ok) {

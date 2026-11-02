@@ -33,10 +33,13 @@ export async function downloadExportExcel(localTaskId) {
   });
 
   if (res.status === 401) {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem('erp_admin_user');
-    window.dispatchEvent(new CustomEvent('auth:logout'));
-    throw new Error('登录已过期,请重新登录');
+    // 仅当请求确实携带 token 时才清登录态,避免后台无 token 请求误删其他标签页的共享登录态
+    if (token) {
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem('erp_admin_user');
+      window.dispatchEvent(new CustomEvent('auth:logout'));
+    }
+    throw new Error(token ? '登录已过期,请重新登录' : '登录状态无效,请重新登录');
   }
   if (!res.ok) {
     let msg = '下载失败 (' + res.status + ')';
