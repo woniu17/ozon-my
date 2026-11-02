@@ -69,6 +69,14 @@ function resolveImageBaseUrl(req) {
   try {
     const host = req?.headers?.host;
     if (!host) return config.imageHostBaseUrl;
+    // 回环地址不能作为图片图床 base(2026-11-08):
+    // 用户经 SSH 隧道/端口转发用 http://localhost(无端口)访问 ERP 时,
+    // 若按 Host 生成图床地址,图片 URL 会指向客户端自身,必然加载失败;
+    // 统一回退配置的公网图床地址(yochylin.com)。
+    const hostname = String(host).split(':')[0].toLowerCase();
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]') {
+      return config.imageHostBaseUrl;
+    }
     const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
     let proto = forwardedProto || req.protocol || 'http';
     // 兜底(2026-10-17):nginx location / 曾缺 X-Forwarded-Proto,公网 https 请求会被当成 http,
@@ -140,7 +148,22 @@ export function imageCacheUrlFor(url) {
   if (!url || !base) return url || null;
   const s = String(url).trim();
   if (!s || s.startsWith('data:')) return url;
-  if (s.startsWith(base) || s.includes('/images/cache/')) return url;
+  // 已是本图床 URL 直接透传
+  if (s.startsWith(base)) return url;
+  // 已含图床路径的 URL:回环地址前缀(localhost/127.0.0.1)与相对路径统一重写为当前 base,
+  // 其余图床地址(如内网 192.168.x.x)透传,防止二次缓存(2026-11-08)。
+  const cacheIdx = s.indexOf('/images/cache/');
+  if (cacheIdx >= 0) {
+    if (cacheIdx === 0) return base + s; // 相对路径 → 补全当前 base
+    try {
+      const u = new URL(s.slice(0, cacheIdx));
+      const h = u.hostname.toLowerCase();
+      if (h === 'localhost' || h === '127.0.0.1' || h === '::1') {
+        return base + s.slice(cacheIdx);
+      }
+    } catch { /* 前缀非标准 URL,透传 */ }
+    return url;
+  }
   let normalized = s;
   if (normalized.startsWith('//')) normalized = 'https:' + normalized;
   if (!/^https?:\/\//i.test(normalized)) return url;
