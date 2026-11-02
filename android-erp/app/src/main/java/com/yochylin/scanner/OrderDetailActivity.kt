@@ -713,14 +713,15 @@ class OrderDetailActivity : ComponentActivity() {
             Math.round((item.price!! * 0.84 - unitCost) * 100) / 100.0
         } else null
 
-        // 多件商品:数量红色加粗,字号加大一倍(对齐订单处理列表,2026-11)
+        // 多件商品:数量红色加粗,字号加大一倍(对齐订单处理列表 ×N 整体高亮,2026-11)
         val qty = item.quantity ?: 0.0
         val qtyText = fmtNum(item.quantity)
         val pricePrefix = buildString {
             append("单价 ").append(fmtMoney(item.price))
             append("  ×")
         }
-        val qtyStart = pricePrefix.length
+        // 高亮起点取 × 号位置(pricePrefix 末位),使 ×N 整体生效,与订单处理列表样式一致
+        val qtyStart = pricePrefix.length - 1
         val priceBase = buildString {
             append(pricePrefix).append(qtyText)
             if (unitCost != null) append(" · 采购 ").append(fmtMoney(unitCost))
