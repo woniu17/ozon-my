@@ -1056,9 +1056,13 @@ function attachCarriageOglTracking(pkgRows) {
   if (!conds.length) return;
   let links;
   try {
+    // 2026-11-08:除派生 headLogisticsNo 外,额外返回该货件全部活跃发运关联
+    // (carriageLinks),供前端同时展示多个发运单的运单号+快递单号(跨店大包实际发出 + Ozon 补登记)。
     links = db.prepare(
       `SELECT cp.package_id AS pid, cp.store_id || '|' || cp.posting_number AS pkey,
-              ch.tracking_number AS tracking
+              cp.carriage_id AS carriageId, cp.source AS source,
+              ch.status AS carriageStatus, ch.tracking_number AS tracking,
+              cp.added_at AS addedAt
        FROM op_carriage_posting cp
        JOIN op_carriage_history ch ON ch.carriage_id = cp.carriage_id
        WHERE cp.removed_at IS NULL AND (${conds.join(' OR ')})
@@ -1069,15 +1073,50 @@ function attachCarriageOglTracking(pkgRows) {
   }
   const byPid = new Map();
   const byKey = new Map();
+  const linksByPid = new Map();
+  const linksByKey = new Map();
+  const pushLink = (map, key, item) => {
+    if (key == null) return;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(item);
+  };
   for (const l of links) {
-    // ASC 遍历后同键留最近一次 added_at 的发运
-    if (l.pid != null && l.tracking) byPid.set(l.pid, l.tracking);
-    if (l.pkey && l.tracking) byKey.set(l.pkey, l.tracking);
+    const item = {
+      carriageId: l.carriageId != null ? Number(l.carriageId) : null,
+      source: l.source || null,
+      carriageStatus: l.carriageStatus || null,
+      trackingNumber: l.tracking || null,
+      addedAt: l.addedAt || null,
+    };
+    // ASC 遍历后同键留最近一次 added_at 的发运(headLogisticsNo 兜底)
+    if (l.pid != null && l.tracking) {
+      byPid.set(l.pid, l.tracking);
+      pushLink(linksByPid, l.pid, item);
+    }
+    if (l.pkey && l.tracking) {
+      byKey.set(l.pkey, l.tracking);
+      pushLink(linksByKey, l.pkey, item);
+    }
   }
   for (const p of pkgRows) {
-    const tracking = byPid.get(p.id) || byKey.get(`${p.storeId}|${p.postingNumber}`);
+    // 已随跨店大包发出(实际交运)的货件:优先显示实际发出大包的发运单号。
+    // 补登记发运单(source='ozon')的单号仅供 Ozon 侧闭环,不代表货件真实物理物流,
+    // 若取"最近加入"会显示补登记单号,误导用户查不到轨迹(2026-11-08)。
+    const shippedTracking = p.crossStoreShipped?.trackingNumber;
+    const key = `${p.storeId}|${p.postingNumber}`;
+    const tracking = shippedTracking || byPid.get(p.id) || byKey.get(key);
     p.headLogisticsNo = tracking || null;
     p.headLogisticsCompany = tracking ? '圆通速递' : null;
+    // 全部活跃发运关联(去重:同一行可能同时命中 package_id 与 store|posting 两条条件)
+    const seen = new Set();
+    const allLinks = [];
+    for (const item of [...(linksByPid.get(p.id) || []), ...(linksByKey.get(key) || [])]) {
+      const dk = `${item.carriageId}|${item.source}|${item.carriageStatus}|${item.trackingNumber}|${item.addedAt}`;
+      if (seen.has(dk)) continue;
+      seen.add(dk);
+      allLinks.push(item);
+    }
+    p.carriageLinks = allLinks;
   }
 }
 
@@ -1186,10 +1225,11 @@ function listPackages(filters = {}) {
       linksByPkg.get(l.packageId).push(l);
     }
     for (const p of pkgRows) p.purchaseLinks = linksByPkg.get(p.id) || [];
+    // 跨店大包已发出:按"货件→已完成大包"读时 join 派生(2026-11-07)
+    // 需先于 attachCarriageOglTracking:OGL 徽标要优先显示实际发出大包的单号(2026-11-08)
+    attachCrossStoreShippedFlags(pkgRows);
     // OGL 集运仓快递单号:按"货件→发运"读时 join 派生(2026-11-06)
     attachCarriageOglTracking(pkgRows);
-    // 跨店大包已发出:按"货件→已完成大包"读时 join 派生(2026-11-07)
-    attachCrossStoreShippedFlags(pkgRows);
   }
   return {
     total,
