@@ -200,6 +200,17 @@
                     android:layout_height="wrap_content"
                     android:orientation="vertical" />
 
+                <!-- OGL 拆包省钱分析(2026-11):同 SKU 多件订单拆包 vs 不拆运费对比,有省钱才显示 -->
+                <LinearLayout
+                    android:id="@+id/dSplitAnalysisCard"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:layout_marginTop="8dp"
+                    android:background="#e8ffea"
+                    android:padding="10dp"
+                    android:visibility="gone" />
+
                 <TextView
                     android:id="@+id/dMoreToggle"
                     android:layout_width="match_parent"

@@ -80,3 +80,132 @@ export function buildOglDeliverySql(weightExpr, valueExpr, fallbackBaseExpr = '3
   }
   return `CASE ${cases.join(' ')} ELSE ${fallbackBaseExpr} + ${fallbackPerGramExpr} * ${weightExpr} END`;
 }
+
+// ────────────────────────────────────────────────────────────────
+// OGL 拆包分析(2026-11):同 SKU 多件订单是否拆成多个包裹更省运费。
+// 计算口径:枚举全部整数件拆分(如 3 件 → 2+1 / 1+1+1),每包按
+// 「申报价值(CNY)×重量(g)」独立匹配费率组,求和后取运费最低的拆法。
+// 仅当整件落在 Budget/Big 等固定费较高档、拆包后每包 ≤500g 落
+// Extra Small 时才会省钱;拆包数超过临界(见 README 规律)则不应拆。
+// ────────────────────────────────────────────────────────────────
+
+// 仍处于卖家可操作窗口的本地状态(发货前可重新拆包/打单)
+export const OGL_SPLIT_OPERABLE_STATUSES = new Set([
+  'wait_process',
+  'wait_stock',
+  'wait_stick',
+  'wait_dispatch',
+]);
+
+/** 单一 SKU 拆包分析
+ * @param {object} p
+ * @param {string}  [p.tplIntegrationType]  Ozon 配送集成类型;非 'ozon_outsourced' 不适用
+ * @param {number}  [p.orderAmountCny]      整件申报价值(CNY)
+ * @param {number}  [p.weightG]             整件打单重量(克)
+ * @param {number}  [p.unitQuantity]        同 SKU 总件数(N)
+ * @param {number}  [p.unitPriceCny]        单件申报价值(CNY)
+ * @param {string}  [p.operateStatus]       本地流转状态(判定是否仍可拆包)
+ * @param {number}  [p.maxUnits=20]         最大件数上限,超限不做(拆分枚举开销)
+ * @returns {object} 不适用返回 {applicable:false, reason};适用返回 {applicable:true, ...}
+ */
+export function analyzeOglSplit({
+  tplIntegrationType,
+  orderAmountCny,
+  weightG,
+  unitQuantity,
+  unitPriceCny,
+  operateStatus,
+  maxUnits = 20,
+}) {
+  const w = Number(weightG);
+  const n = Number(unitQuantity);
+  const v = Number(orderAmountCny);
+  const unitV = Number(unitPriceCny);
+  if (tplIntegrationType !== 'ozon_outsourced') return { applicable: false, reason: 'not_ogl' };
+  if (!Number.isFinite(v) || v <= 0 || !Number.isFinite(w) || w <= 0) return { applicable: false, reason: 'no_weight_or_amount' };
+  if (!Number.isFinite(n) || n <= 1) return { applicable: false, reason: 'single_unit' };
+  if (n > maxUnits) return { applicable: false, reason: 'too_many_units' };
+  if (!Number.isFinite(unitV) || unitV <= 0) return { applicable: false, reason: 'no_unit_price' };
+
+  const unitW = w / n; // 单件重量(克,可为小数)
+  const operable = OGL_SPLIT_OPERABLE_STATUSES.has(operateStatus);
+  const whole = estimateOglFreight({ valueCny: v, weightG: w });
+  if (!whole?.deliveryCny) return { applicable: false, reason: 'whole_out_of_tariff' };
+
+  // 枚举整数件拆分,求运费最低拆法
+  const compositions = [];
+  (function gen(rest, maxPart, prefix) {
+    if (rest === 0) { compositions.push(prefix); return; }
+    for (let k = Math.min(rest, maxPart); k >= 1; k--) gen(rest - k, k, [...prefix, k]);
+  })(n, n, []);
+
+  let best = null; // { packages, totalCny, saveCny }
+  const seen = new Set();
+  for (const comp of compositions) {
+    const key = comp.join('+');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (comp.length === 1) continue; // 整件已在 whole
+    const packages = [];
+    let total = 0;
+    let valid = true;
+    for (const units of comp) {
+      const pkgValue = round2(units * unitV);
+      const pkgWeight = Math.round(units * unitW);
+      const f = estimateOglFreight({ valueCny: pkgValue, weightG: pkgWeight });
+      if (!f?.deliveryCny) { valid = false; break; }
+      total += f.deliveryCny;
+      packages.push({
+        units,
+        valueCny: pkgValue,
+        weightG: pkgWeight,
+        groupKey: f.group.key,
+        groupName: f.group.name,
+        fixedFee: f.fixedFee,
+        perGram: f.group.perGram,
+        variableFee: f.variableFee,
+        deliveryCny: f.deliveryCny,
+        formula: `¥${f.fixedFee.toFixed(2)} + ¥${f.group.perGram}/克 × ${pkgWeight}克 = ¥${f.deliveryCny.toFixed(2)}`,
+      });
+    }
+    if (!valid) continue;
+    const saveCny = round2(whole.deliveryCny - total);
+    if (!best || saveCny > best.saveCny) {
+      best = { packages, totalCny: round2(total), saveCny };
+    }
+  }
+
+  if (!best || best.saveCny <= 0) {
+    return {
+      applicable: false,
+      reason: 'no_saving',
+      whole: buildSplitWhole(whole, v, w),
+      operable,
+    };
+  }
+
+  return {
+    applicable: true,
+    operable,
+    operateStatus: operateStatus || null,
+    whole: buildSplitWhole(whole, v, w),
+    best,
+    saveCny: best.saveCny,
+    packagesCount: best.packages.length,
+    formula: best.packages.map((p, i) => `包${i + 1} ${p.formula}`).join(' ＋ ') + ` = ¥${best.totalCny.toFixed(2)}`,
+  };
+}
+
+function buildSplitWhole(whole, valueCny, weightG) {
+  return {
+    groupKey: whole.group.key,
+    groupName: whole.group.name,
+    valueCny,
+    weightG,
+    fixedFee: whole.fixedFee,
+    perGram: whole.group.perGram,
+    variableFee: whole.variableFee,
+    deliveryCny: whole.deliveryCny,
+    formula: `¥${whole.fixedFee.toFixed(2)} + ¥${whole.group.perGram}/克 × ${weightG}克 = ¥${whole.deliveryCny.toFixed(2)}`,
+  };
+}

@@ -80,6 +80,29 @@
       </view>
     </view>
 
+    <!-- OGL 拆包省钱分析(2026-11):同 SKU 多件订单,拆包 vs 不拆运费公式对比 -->
+    <view v-if="pkg.splitAnalysis?.applicable" class="card split-analysis-card">
+      <view class="section-title">
+        OGL 运费拆包分析
+        <text class="split-status" :class="{ active: pkg.splitAnalysis.operable }">{{ pkg.splitAnalysis.operable ? '可拆包' : '已发货' }}</text>
+      </view>
+      <view class="split-save-head">
+        <text class="split-save-big">拆{{ pkg.splitAnalysis.packagesCount }}包可省 ¥{{ fmtMoney(pkg.splitAnalysis.saveCny) }}</text>
+      </view>
+      <view class="split-block whole">
+        <view class="split-block-title">不拆(整件) · {{ pkg.splitAnalysis.whole.groupName }}档</view>
+        <view class="split-formula">{{ pkg.splitAnalysis.whole.formula }}</view>
+      </view>
+      <view class="split-block best">
+        <view class="split-block-title">最优拆 {{ pkg.splitAnalysis.packagesCount }}包</view>
+        <view v-for="(p, i) in pkg.splitAnalysis.best.packages" :key="i" class="split-pkg">
+          <view class="split-pkg-head">包{{ i + 1 }} · {{ p.units }}件({{ p.weightG }}g, ¥{{ p.valueCny }}) · {{ p.groupName }}档</view>
+          <view class="split-formula">{{ p.formula }}</view>
+        </view>
+        <view class="split-total">合计: {{ pkg.splitAnalysis.formula }}</view>
+      </view>
+    </view>
+
     <!-- 产品行 -->
     <view class="card">
       <view class="section-title">商品({{ items.length }})</view>
@@ -966,6 +989,75 @@ onShow(() => {
   font-weight: 600;
   color: #1f2329;
   margin-bottom: 16rpx;
+}
+
+/* OGL 拆包省钱分析(2026-11) */
+.split-analysis-card {
+  border: 1rpx solid #b7f0c0;
+  background: #f8fef9;
+}
+.split-status {
+  margin-left: 12rpx;
+  font-size: 20rpx;
+  font-weight: 500;
+  color: #86909c;
+  padding: 2rpx 14rpx;
+  border-radius: 999rpx;
+  background: #f2f3f5;
+}
+.split-status.active {
+  color: #0b7a2d;
+  background: #d3f5d9;
+}
+.split-save-head {
+  margin-bottom: 14rpx;
+}
+.split-save-big {
+  font-size: 30rpx;
+  font-weight: 800;
+  color: #0b7a2d;
+}
+.split-block {
+  border-radius: 12rpx;
+  padding: 14rpx 16rpx;
+  margin-top: 12rpx;
+}
+.split-block.whole {
+  background: #f2f3f5;
+}
+.split-block.best {
+  background: #e8ffea;
+}
+.split-block-title {
+  font-size: 24rpx;
+  font-weight: 600;
+  color: #1f2329;
+  margin-bottom: 6rpx;
+}
+.split-pkg {
+  margin-top: 8rpx;
+}
+.split-pkg-head {
+  font-size: 22rpx;
+  color: #374151;
+}
+.split-formula {
+  font-size: 22rpx;
+  color: #0b7a2d;
+  font-family: monospace;
+  margin-top: 2rpx;
+}
+.split-block.whole .split-formula {
+  color: #4e5969;
+}
+.split-total {
+  margin-top: 10rpx;
+  padding-top: 8rpx;
+  border-top: 1rpx dashed #7dd68c;
+  font-size: 24rpx;
+  font-weight: 700;
+  color: #0b7a2d;
+  font-family: monospace;
 }
 
 .muted-line {

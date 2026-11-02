@@ -134,6 +134,18 @@
           </view>
         </view>
 
+        <!-- OGL 拆包省钱提示(2026-11):同 SKU 多件订单拆包更省,点击进详情看公式 -->
+        <view
+          v-if="pkg.splitAnalysis?.applicable"
+          class="split-save-bar"
+          :class="{ passive: !pkg.splitAnalysis.operable }"
+          @click.stop="goDetail(pkg)"
+        >
+          <text class="split-save-text">拆{{ pkg.splitAnalysis.packagesCount }}包省 <text class="split-save-amt">¥{{ fmtMoney(pkg.splitAnalysis.saveCny) }}</text></text>
+          <text v-if="!pkg.splitAnalysis.operable" class="split-save-note">已发货</text>
+          <text v-else class="split-save-note active">可拆包</text>
+        </view>
+
         <!-- 时间行:未交运(有最迟发货时间且非取消)展示下单/最迟/剩发,有利润时显示预估利润 -->
         <view v-if="showShipCountdown(pkg)" class="time-row">
           <view class="t-line">
@@ -1031,6 +1043,41 @@ onReachBottom(async () => {
 
 .muted {
   color: #a6abb3;
+}
+
+/* OGL 拆包省钱提示(2026-11) */
+.split-save-bar {
+  margin-top: 14rpx;
+  padding: 10rpx 16rpx;
+  border-radius: 10rpx;
+  background: #e8ffea;
+  border: 1rpx solid #b7f0c0;
+  display: flex;
+  align-items: center;
+}
+.split-save-bar.passive {
+  background: #f4faf5;
+  border-color: #d8e6da;
+}
+.split-save-text {
+  font-size: 24rpx;
+  color: #0b7a2d;
+  font-weight: 600;
+  flex: 1;
+}
+.split-save-amt {
+  font-weight: 800;
+}
+.split-save-note {
+  font-size: 20rpx;
+  color: #86909c;
+  padding: 2rpx 12rpx;
+  border-radius: 999rpx;
+  background: #f2f3f5;
+}
+.split-save-note.active {
+  color: #0b7a2d;
+  background: #d3f5d9;
 }
 
 /* 时间行(未交运包裹:下单/最迟/剩发) */

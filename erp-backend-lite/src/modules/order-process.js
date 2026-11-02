@@ -76,7 +76,7 @@ import {
   estimateProfit,
   isOglDelivery,
 } from '../services/profit-estimator.js';
-import { deriveOglWeight, getOglGroup } from '../services/ogl-freight.js';
+import { deriveOglWeight, getOglGroup, analyzeOglSplit } from '../services/ogl-freight.js';
 // 采购单自动补全用平台搜索(跨账号,按单号拉订单详情含 goods)
 import { searchAliOrder } from './platform-orders.js';
 import { searchPddOrder } from '../services/platform-orders/adapters/pdd.js';
@@ -274,6 +274,15 @@ function enrichListData(data) {
       pkg.systemWeightG = null;
     }
     pkg.profit = computeProfit(pkg, pkg.operateStatus === 'cancelled', rateInfo?.rate);
+    // OGL 拆包分析(2026-11):同 SKU 多件订单提示拆包省钱(列表徽标+详情公式共用)
+    pkg.splitAnalysis = analyzeOglSplit({
+      tplIntegrationType: pkg.tplIntegrationType,
+      orderAmountCny: Number(pkg.orderAmount) || 0,
+      weightG: pkg.weightG,
+      unitQuantity: pkg.items.length === 1 ? pkg.items[0].quantity : undefined,
+      unitPriceCny: pkg.items.length === 1 ? Number(pkg.items[0].price) : undefined,
+      operateStatus: pkg.operateStatus,
+    });
   }
   data.rubRate = rateInfo;
   // 机器名(2026-10-16 多机部署):供安卓差集兜底通知展示来源
@@ -693,6 +702,16 @@ router.get('/admin/api/order-process/detail/:id', (req, res, next) => {
     }
     detail.rubRate = rateInfo;
     detail.package.profit = computeProfit(detail.package, detail.package.operateStatus === 'cancelled', rate);
+    // OGL 拆包分析(与列表同口径,详情页展示完整公式)
+    const dItems = detail.items || [];
+    detail.package.splitAnalysis = analyzeOglSplit({
+      tplIntegrationType: detail.package.tplIntegrationType,
+      orderAmountCny: Number(detail.package.orderAmount) || 0,
+      weightG: detail.package.weightG,
+      unitQuantity: dItems.length === 1 ? dItems[0].quantity : undefined,
+      unitPriceCny: dItems.length === 1 ? Number(dItems[0].price) : undefined,
+      operateStatus: detail.package.operateStatus,
+    });
     res.json(ok(detail));
   } catch (e) {
     next(e);

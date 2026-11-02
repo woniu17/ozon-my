@@ -96,6 +96,7 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
         private val oPurchaseTag: TextView = view.findViewById(R.id.oPurchaseTag)
         private val oArrivedTag: TextView = view.findViewById(R.id.oArrivedTag)
         private val oFootAmts: TextView = view.findViewById(R.id.oFootAmts)
+        private val oSplitSave: TextView = view.findViewById(R.id.oSplitSave)
         private val oActionArea: LinearLayout = view.findViewById(R.id.oActionArea)
         private val oTimeContainer: LinearLayout = view.findViewById(R.id.oTimeContainer)
 
@@ -205,6 +206,27 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
                 append("订单 ").append(fmtMoney(pkg.orderAmount))
                 append("  采购 ").append(fmtMoney(pkg.totalPurchaseAmount))
                 append("  ").append(pkg.weightG?.let { "${fmtNum(it)}g" } ?: "—")
+            }
+
+            // OGL 拆包省钱提示(2026-11):applicable 时显示,点击进详情看公式
+            val sa = pkg.splitAnalysis
+            if (sa?.applicable == true) {
+                oSplitSave.visibility = View.VISIBLE
+                oSplitSave.text = buildString {
+                    append("拆").append(sa.packagesCount ?: 0).append("包省 ¥").append(fmtMoney(sa.saveCny))
+                    append(if (sa.operable) " · 可拆包" else " · 已发货")
+                }
+                if (sa.operable) {
+                    oSplitSave.setTextColor(Color.parseColor("#16a34a"))
+                    oSplitSave.setRoundedBg(Color.parseColor("#e8ffea"))
+                } else {
+                    oSplitSave.setTextColor(Color.parseColor("#86b78e"))
+                    oSplitSave.setRoundedBg(Color.parseColor("#f4faf5"))
+                }
+                oSplitSave.setOnClickListener { callbacks.onOpenDetail(pkg) }
+            } else {
+                oSplitSave.visibility = View.GONE
+                oSplitSave.setOnClickListener(null)
             }
 
             // 操作区（重量输入/提交发货/面单）

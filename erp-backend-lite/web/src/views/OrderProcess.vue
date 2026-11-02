@@ -2966,6 +2966,17 @@ function othersTitle(pkg) {
   if (pkg.accrual) return `其它费用(代理佣金/星星商品/逆向物流等)${fmtRub(pkg.accrual.othersRub)} × 汇率 ${pkg.accrual.rate}`;
   return '无应计数据(未妥投或 Ozon 未生成)';
 }
+// OGL 拆包省钱悬浮:不拆/拆包完整公式 + 是否仍可操作
+function splitAnalysisTitle(pkg) {
+  const sa = pkg.splitAnalysis;
+  if (!sa?.applicable) return '';
+  const lines = [];
+  lines.push(`不拆(整件 ${sa.whole.groupName}): ${sa.whole.formula}`);
+  lines.push(`拆 ${sa.packagesCount} 包: ${sa.formula}`);
+  lines.push(`可省 ¥${fmtMoney(sa.saveCny)}`);
+  lines.push(sa.operable ? '当前状态仍可拆包(发货前),建议拆包发货' : '已发货/交运,无法再拆(仅参考)');
+  return lines.join('\n');
+}
 
 function profitLabel(pkg) {
   if (pkg.profit?.cancelled) return '利润';
@@ -3233,6 +3244,17 @@ function crossStoreShippedTitle(pkg) {
   if (s.trackingNumber) parts.push(`OGL ${s.trackingNumber}`);
   if (s.addedAt) parts.push(`加入 ${s.addedAt}`);
   return parts.join('，') + '；后续发运/打单均为 Ozon 补登记';
+}
+
+// 2026-11-08:多发运单 OGL 徽标悬浮提示(发运单号/来源/状态/快递单号/加入时间)
+function oglLinkTitle(pkg, l) {
+  const parts = [`发运单 ${l.carriageId}`];
+  if (l.source === 'manual') parts.push('实际发出大包');
+  else if (l.source === 'ozon') parts.push('Ozon 补登记');
+  if (l.carriageStatus) parts.push(`状态 ${l.carriageStatus}`);
+  if (l.trackingNumber) parts.push(`快递单号 ${l.trackingNumber}`);
+  if (l.addedAt) parts.push(`加入 ${l.addedAt}`);
+  return parts.join('，');
 }
 
 function purchaseTag(pkg) {
@@ -3894,6 +3916,11 @@ onUnmounted(() => {
               <div class="amt-row sub" :title="weightTitle(pkg)"><span class="amt-name">{{ weightLabel(pkg) }}</span><span class="amt-val" :class="{ muted: pkg.weightG == null }">{{ pkg.weightG != null ? Math.floor(pkg.weightG) + 'g' : '—' }}</span></div>
               <!-- 重量(估):由实际配送费反推(整数 g) -->
               <div class="amt-row sub muted" :title="weightTitle(pkg)"><span class="amt-name">重量(估)</span><span class="amt-val" :class="{ muted: pkg.accrual?.derivedWeight == null }">{{ pkg.accrual?.derivedWeight != null ? pkg.accrual.derivedWeight + 'g' : '—' }}</span></div>
+              <!-- OGL 拆包省钱提示(2026-11):同 SKU 多件,拆包后总运费更低 -->
+              <div v-if="pkg.splitAnalysis?.applicable" class="amt-row split-save-row" :class="{ 'split-save-passive': !pkg.splitAnalysis.operable }" :title="splitAnalysisTitle(pkg)">
+                <span class="amt-name split-save-name">{{ pkg.splitAnalysis.operable ? '💡拆包省钱' : '拆包省钱' }}</span>
+                <span class="amt-val split-save-val">拆{{ pkg.splitAnalysis.packagesCount }}包省 ¥{{ fmtMoney(pkg.splitAnalysis.saveCny) }}</span>
+              </div>
               <!-- 其它费用:代理佣金/星星商品/逆向物流等,= 应计合计 − 销售佣金 − 配送 -->
               <div class="amt-row sub" :title="othersTitle(pkg)"><span class="amt-name">其它费用</span><span class="amt-val" :class="{ muted: !pkg.accrual }">{{ pkg.accrual ? fmtMoney(pkg.accrual.others) : '—' }}</span></div>
               <div class="amt-row" :title="profitTitle(pkg)">
@@ -3916,9 +3943,15 @@ onUnmounted(() => {
                 <span :class="purchaseTag(pkg).cls" style="margin-left: 4px">{{ purchaseTag(pkg).label }}</span>
                 <span v-if="arrivedTag(pkg)" :class="arrivedTag(pkg).cls" style="margin-left: 4px">{{ arrivedTag(pkg).label }}</span>
               </div>
-              <!-- OGL 国内集运仓快递单号(2026-11-06 读时 join):单号属于发运单,按"货件→发运"派生展示;多容器显示"等N个" -->
-              <div v-if="pkg.headLogisticsNo" class="sub">
-                <span class="pkg-ogl-badge" :title="`OGL 国内集运仓快递单号(${pkg.headLogisticsCompany || '国内快递'})：${pkg.headLogisticsNo.split(',').join('、')}`">OGL：{{ pkg.headLogisticsNo.split(',')[0] }}{{ pkg.headLogisticsNo.includes(',') ? ` 等${pkg.headLogisticsNo.split(',').length}个` : '' }}</span>
+              <!-- OGL 国内集运仓快递单号(2026-11-06 读时 join):单号属于发运单,按"货件→发运"派生展示;
+                   跨店大包+补登记场景同时显示全部发运单(运单号+快递单号),实际发出大包(manual)与补登记(ozon)分色(2026-11-08) -->
+              <div v-if="pkg.headLogisticsNo || (pkg.carriageLinks && pkg.carriageLinks.length)" class="sub ogl-links">
+                <template v-if="pkg.carriageLinks && pkg.carriageLinks.length > 1">
+                  <span v-for="(l, i) in pkg.carriageLinks" :key="i" class="pkg-ogl-badge"
+                        :class="l.source === 'manual' ? 'ogl-manual' : 'ogl-ozon'"
+                        :title="oglLinkTitle(pkg, l)">运单 {{ l.carriageId }}：{{ l.trackingNumber }}</span>
+                </template>
+                <span v-else class="pkg-ogl-badge" :title="`OGL 国内集运仓快递单号(${pkg.headLogisticsCompany || '国内快递'})：${pkg.headLogisticsNo.split(',').join('、')}`">OGL：{{ pkg.headLogisticsNo.split(',')[0] }}{{ pkg.headLogisticsNo.includes(',') ? ` 等${pkg.headLogisticsNo.split(',').length}个` : '' }}</span>
               </div>
               <!-- 取消原因细分标签(仅 cancelled 状态订单显示) -->
               <div v-if="pkg.ozonStatus === 'cancelled' && cancelReasonLabel(pkg)" class="sub cancel-reason-line">
@@ -4675,6 +4708,41 @@ onUnmounted(() => {
           </tbody>
         </table>
 
+        <!-- OGL 拆包省钱分析(2026-11):同 SKU 多件订单,拆包 vs 不拆运费公式对比 -->
+        <div v-if="detail.package.splitAnalysis?.applicable" class="detail-section">
+          <div class="detail-section-title">
+            OGL 运费拆包分析
+            <span
+              class="tag"
+              :class="detail.package.splitAnalysis.operable ? 'tag-info' : 'tag-mute'"
+              :title="detail.package.splitAnalysis.operable ? '当前仍处于发货前,可拆包操作' : '已发货/交运,无法再拆(仅供参考)'"
+            >{{ detail.package.splitAnalysis.operable ? '可拆包' : '已发货' }}</span>
+            <span class="tag" style="background:#ecfdf5;color:#16a34a;border-color:#16a34a">拆{{ detail.package.splitAnalysis.packagesCount }}包可省 ¥{{ fmtMoney(detail.package.splitAnalysis.saveCny) }}</span>
+          </div>
+          <div class="split-analysis-body">
+            <div class="split-compare">
+              <div class="split-col split-col-whole">
+                <div class="split-col-title">不拆(整件)</div>
+                <div class="split-col-group">{{ detail.package.splitAnalysis.whole.groupName }} 档 · {{ detail.package.splitAnalysis.whole.weightG }}g · 申报 ¥{{ detail.package.splitAnalysis.whole.valueCny }}</div>
+                <div class="mono">{{ detail.package.splitAnalysis.whole.formula }}</div>
+              </div>
+              <div class="split-arrow">→</div>
+              <div class="split-col split-col-best">
+                <div class="split-col-title">最优拆 {{ detail.package.splitAnalysis.packagesCount }} 包</div>
+                <div
+                  v-for="(p, i) in detail.package.splitAnalysis.best.packages"
+                  :key="i"
+                  class="split-pkg-line"
+                >
+                  <span class="split-pkg-name">包{{ i + 1 }}·{{ p.units }}件({{ p.weightG }}g, ¥{{ p.valueCny }})</span>
+                  <span class="mono split-pkg-formula">{{ p.groupName }}档 · {{ p.formula }}</span>
+                </div>
+                <div class="split-pkg-total mono">合计: {{ detail.package.splitAnalysis.formula }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Ozon 应计明细(已完成/已取消货件有数据;真实财务扣款,RUB) -->
         <div class="detail-section">
           <div class="detail-section-title">
@@ -5279,6 +5347,85 @@ a.product-title:hover {
   white-space: nowrap;
 }
 
+/* OGL 拆包省钱提示行(2026-11):绿色=仍可操作,灰绿=已发货仅参考 */
+.split-save-row {
+  align-items: center;
+  margin-top: 2px;
+}
+.split-save-name {
+  color: #16a34a;
+  font-weight: 600;
+}
+.split-save-val {
+  color: #16a34a;
+  font-weight: 700;
+}
+.split-save-passive .split-save-name,
+.split-save-passive .split-save-val {
+  color: #86b78e;
+}
+.split-save-passive .split-save-val {
+  font-weight: 500;
+}
+
+/* 详情弹窗 OGL 拆包分析(2026-11) */
+.split-analysis-body {
+  margin-top: 8px;
+}
+.split-compare {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+}
+.split-col {
+  flex: 1;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: #fafafa;
+}
+.split-col-best {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+.split-col-title {
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.split-col-group {
+  color: #6b7280;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+.split-arrow {
+  align-self: center;
+  color: #16a34a;
+  font-weight: 700;
+  font-size: 18px;
+}
+.split-pkg-line {
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.split-pkg-name {
+  color: #374151;
+  font-size: 12px;
+}
+.split-pkg-formula {
+  font-size: 12px;
+  color: #065f46;
+}
+.split-pkg-total {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed #bbf7d0;
+  color: #16a34a;
+  font-weight: 700;
+  font-size: 13px;
+}
+
 /* 采购信息列:参考产品信息列 product-item 结构,展示采购商品图/名称/规格/价格×数量 */
 .purchase-item + .purchase-item {
   margin-top: 6px;
@@ -5614,6 +5761,18 @@ a.product-title:hover {
   font-weight: 600;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   white-space: nowrap;
+}
+
+/* 2026-11-08:多发运单 OGL 徽标(跨店大包实际发出 + Ozon 补登记同时展示) */
+.ogl-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.pkg-ogl-badge.ogl-ozon {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
 }
 
 /* 拆单母件/子件徽标(2026-09-18):子件琥珀、母件靛蓝 */

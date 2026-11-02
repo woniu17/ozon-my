@@ -149,6 +149,18 @@
             android:gravity="end" />
     </LinearLayout>
 
+    <!-- OGL 拆包省钱提示(2026-11):同 SKU 多件订单拆包运费更低;绿=可拆包,灰绿=已发货仅参考 -->
+    <TextView
+        android:id="@+id/oSplitSave"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:textSize="11sp"
+        android:textStyle="bold"
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="4dp"
+        android:visibility="gone" />
+
     <!-- 操作区（重量输入/提交发货/面单，动态填充） -->
     <LinearLayout
         android:id="@+id/oActionArea"

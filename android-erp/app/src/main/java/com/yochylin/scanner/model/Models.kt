@@ -82,6 +82,50 @@ data class Pkg(
     val returnStateName: String? = null,
     val cancelReasonId: Int? = null,
     val cancelReason: String? = null,
+    val splitAnalysis: SplitAnalysis? = null, // OGL 拆包省钱分析(2026-11)
+)
+
+// OGL 拆包省钱分析(2026-11):后端 /order-process/list 与 /detail 返回,同 SKU 多件订单拆包运费对比
+data class SplitAnalysis(
+    val applicable: Boolean = false,
+    val operable: Boolean = false,
+    val operateStatus: String? = null,
+    val whole: SplitWhole? = null,
+    val best: SplitBest? = null,
+    val saveCny: Double? = null,
+    val packagesCount: Int? = null,
+    val formula: String? = null,
+)
+
+data class SplitWhole(
+    val groupKey: String? = null,
+    val groupName: String? = null,
+    val valueCny: Double? = null,
+    val weightG: Double? = null,
+    val fixedFee: Double? = null,
+    val perGram: Double? = null,
+    val variableFee: Double? = null,
+    val deliveryCny: Double? = null,
+    val formula: String? = null,
+)
+
+data class SplitBest(
+    val packages: List<SplitPackage>? = null,
+    val totalCny: Double? = null,
+    val saveCny: Double? = null,
+)
+
+data class SplitPackage(
+    val units: Int? = null,
+    val valueCny: Double? = null,
+    val weightG: Int? = null,
+    val groupKey: String? = null,
+    val groupName: String? = null,
+    val fixedFee: Double? = null,
+    val perGram: Double? = null,
+    val variableFee: Double? = null,
+    val deliveryCny: Double? = null,
+    val formula: String? = null,
 )
 
 data class PkgItem(

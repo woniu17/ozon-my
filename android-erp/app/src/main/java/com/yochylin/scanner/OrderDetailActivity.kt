@@ -84,6 +84,7 @@ class OrderDetailActivity : ComponentActivity() {
     private lateinit var dTags: TextView
     private lateinit var dProfitStrip: LinearLayout
     private lateinit var dInfoList: LinearLayout
+    private lateinit var dSplitAnalysisCard: LinearLayout // OGL 拆包省钱分析(2026-11)
     private lateinit var dMoreToggle: TextView
     private lateinit var dMoreInfo: LinearLayout
     private lateinit var dProdTitle: TextView
@@ -138,6 +139,7 @@ class OrderDetailActivity : ComponentActivity() {
         dTags = findViewById(R.id.dTags)
         dProfitStrip = findViewById(R.id.dProfitStrip)
         dInfoList = findViewById(R.id.dInfoList)
+        dSplitAnalysisCard = findViewById(R.id.dSplitAnalysisCard)
         dMoreToggle = findViewById(R.id.dMoreToggle)
         dMoreInfo = findViewById(R.id.dMoreInfo)
         dProdTitle = findViewById(R.id.dProdTitle)
@@ -537,6 +539,7 @@ class OrderDetailActivity : ComponentActivity() {
 
         renderProfitStrip(p)
         renderInfoList(p)
+        renderSplitAnalysis(p)
         renderMoreInfo()
         renderItems(detail.items ?: p.items ?: emptyList())
         renderPurchaseLinks(links)
@@ -583,6 +586,79 @@ class OrderDetailActivity : ComponentActivity() {
             append(p.profit?.delivery?.let { fmtMoney(it) } ?: "—")
             p.profit?.deliveryGroup?.takeIf { it.isNotBlank() }?.let { append(" · ").append(it) }
         })
+    }
+
+    // OGL 拆包省钱分析(2026-11):applicable 时展示整件/拆包公式对比,点击卡片进列表不适用场景不显示
+    private fun renderSplitAnalysis(p: Pkg) {
+        dSplitAnalysisCard.removeAllViews()
+        val sa = p.splitAnalysis
+        if (sa?.applicable != true) {
+            dSplitAnalysisCard.visibility = View.GONE
+            return
+        }
+        dSplitAnalysisCard.visibility = View.VISIBLE
+        dSplitAnalysisCard.setBackgroundColor(Color.parseColor(if (sa.operable) "#e8ffea" else "#f4faf5"))
+
+        val head = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        val title = TextView(this).apply {
+            text = "拆${sa.packagesCount ?: 0}包可省 ¥${fmtMoney(sa.saveCny)}"
+            setTextColor(Color.parseColor("#0b7a2d"))
+            textSize = 13f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        head.addView(title)
+        val status = TextView(this).apply {
+            text = if (sa.operable) "可拆包" else "已发货"
+            setTextColor(Color.parseColor(if (sa.operable) "#0b7a2d" else "#86909c"))
+            textSize = 10f
+            setRoundedBg(Color.parseColor(if (sa.operable) "#d3f5d9" else "#f2f3f5"), 6f)
+            setPadding(dp(8), dp(3), dp(8), dp(3))
+        }
+        head.addView(status)
+        dSplitAnalysisCard.addView(head)
+
+        dSplitAnalysisCard.addView(
+            splitBlock("不拆(整件) · ${sa.whole?.groupName ?: ""}档", sa.whole?.formula ?: "", green = false)
+        )
+        for ((i, sp) in (sa.best?.packages.orEmpty()).withIndex()) {
+            dSplitAnalysisCard.addView(
+                splitBlock(
+                    "包${i + 1} · ${sp.units}件(${sp.weightG}g, ¥${fmtMoney(sp.valueCny)}) · ${sp.groupName ?: ""}档",
+                    sp.formula ?: "",
+                    green = true
+                )
+            )
+        }
+        dSplitAnalysisCard.addView(splitBlock("合计", sa.formula ?: "", green = true, bold = true))
+    }
+
+    private fun splitBlock(title: String, formula: String, green: Boolean, bold: Boolean = false): LinearLayout {
+        val ctx = this@OrderDetailActivity
+        return LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) }
+            setBackgroundColor(Color.parseColor(if (green) "#f0fdf4" else "#f2f3f5"))
+            setPadding(dp(8), dp(6), dp(8), dp(6))
+            val t = TextView(ctx).apply {
+                text = title
+                setTextColor(Color.parseColor(COLOR_MUTE))
+                textSize = 10f
+                setTypeface(null, if (bold) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
+            }
+            addView(t)
+            val f = TextView(ctx).apply {
+                text = formula
+                setTextColor(Color.parseColor(if (green) "#0b7a2d" else COLOR_TEXT))
+                textSize = 10f
+                typeface = android.graphics.Typeface.MONOSPACE
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(2) }
+            }
+            addView(f)
+        }
     }
 
     private fun renderMoreInfo() {
