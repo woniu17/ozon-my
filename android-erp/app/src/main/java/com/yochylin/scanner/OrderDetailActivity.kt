@@ -720,8 +720,9 @@ class OrderDetailActivity : ComponentActivity() {
             append("单价 ").append(fmtMoney(item.price))
             append("  ×")
         }
-        // 高亮起点取 × 号位置(pricePrefix 末位),使 ×N 整体生效,与订单处理列表样式一致
+        // 高亮区间:起点取 × 号位置(pricePrefix 末位),终点取数字之后,使 ×N 整体生效
         val qtyStart = pricePrefix.length - 1
+        val qtyEnd = pricePrefix.length + qtyText.length
         val priceBase = buildString {
             append(pricePrefix).append(qtyText)
             if (unitCost != null) append(" · 采购 ").append(fmtMoney(unitCost))
@@ -730,9 +731,9 @@ class OrderDetailActivity : ComponentActivity() {
         val priceLine = TextView(this).apply {
             text = if (qty > 1) {
                 SpannableString(priceBase).apply {
-                    setSpan(StyleSpan(Typeface.BOLD), qtyStart, qtyStart + qtyText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                    setSpan(ForegroundColorSpan(Color.parseColor("#F53F3F")), qtyStart, qtyStart + qtyText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                    setSpan(RelativeSizeSpan(2f), qtyStart, qtyStart + qtyText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    setSpan(StyleSpan(Typeface.BOLD), qtyStart, qtyEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    setSpan(ForegroundColorSpan(Color.parseColor("#F53F3F")), qtyStart, qtyEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    setSpan(RelativeSizeSpan(2f), qtyStart, qtyEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 }
             } else {
                 priceBase
