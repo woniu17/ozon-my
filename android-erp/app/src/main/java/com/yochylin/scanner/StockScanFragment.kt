@@ -336,10 +336,12 @@ class StockScanFragment : Fragment() {
                     )
                 )
                 val resp = Api.parse<PackageListResponse>(data)
-                val stockPkg = resp.packages.firstOrNull {
+                // 2026-11-08:同一采购快递单号可关联多个待入库订单,收集全部待入库订单
+                // (而非只取第一个),多个时弹窗确认后一次性全部入库,避免漏入。
+                val pendingPkgs = resp.packages.filter {
                     it.ozonStatus == "awaiting_packaging" && it.id.isNotEmpty()
                 }
-                if (stockPkg == null) {
+                if (pendingPkgs.isEmpty()) {
                     // 未命中待入库订单:只在视频区提示,不进记录列表
                     if (resp.packages.isEmpty()) {
                         showScanHint("❌ 未找到订单:$code", error = true)
@@ -382,6 +384,12 @@ class StockScanFragment : Fragment() {
                     }
                     return@launch
                 }
+                // 多个待入库订单(同一采购单拆成多单):弹窗列出全部,确认后批量入库
+                if (pendingPkgs.size > 1) {
+                    showMultiPackageConfirm(pendingPkgs, code)
+                    return@launch
+                }
+                val stockPkg = pendingPkgs[0]
                 val totalQty = (stockPkg.items?.sumOf { it.quantity ?: 0.0 } ?: 0.0).toLong()
                 // 订单商品首图(入库记录展示,取第一个商品图片)
                 val imageUrl = stockPkg.items?.firstOrNull()?.picUrl
@@ -458,6 +466,69 @@ class StockScanFragment : Fragment() {
                 reportLog(
                     "multi_confirm_cancel", "用户取消多件入库确认",
                     code = code, packageId = pkg.id, postingNumber = pkg.postingNumber, storeId = pkg.storeId,
+                    result = "warning"
+                )
+            }
+            updateStats()
+        }
+        dialog.show()
+    }
+
+    /** 同一采购单关联多个待入库订单:弹窗列出全部订单,确认后一次性全部入库(2026-11-08) */
+    private fun showMultiPackageConfirm(pkgs: List<Pkg>, code: String) {
+        if (!isAdded) return
+        pendingCount++
+        dialogShowing = true
+        updateStats()
+        val first = pkgs.first()
+        val postingNumbers = pkgs.map { it.postingNumber ?: it.id }
+        addRecord(
+            RecordEntry(
+                RecordStatus.PENDING, code, first.id, first.postingNumber,
+                "关联 ${pkgs.size} 个待入库订单,待确认", first.items?.firstOrNull()?.picUrl
+            )
+        )
+        reportLog(
+            "multi_package_confirm_show", "同一快递单关联多个待入库订单,弹窗确认",
+            code = code, packageId = first.id, postingNumber = first.postingNumber, storeId = first.storeId,
+            result = "pending", extra = mapOf("count" to pkgs.size, "postingNumbers" to postingNumbers)
+        )
+
+        val message = buildString {
+            append("该快递单关联 ${pkgs.size} 个待入库订单:\n")
+            for (pkg in pkgs) {
+                val qty = pkg.items?.sumOf { it.quantity ?: 0.0 }?.toLong() ?: 0
+                append("· ${pkg.postingNumber ?: pkg.id}")
+                if (!pkg.storeName.isNullOrBlank()) append(" (${pkg.storeName})")
+                append(" 共 $qty 件\n")
+            }
+            append("\n将向 Ozon 确认全部订单为一个货件(不拆分),是否全部入库?")
+        }
+
+        var confirmed = false
+        val dialog = AlertDialog.Builder(requireContext())
+            .setTitle("批量入库确认")
+            .setMessage(message)
+            .setPositiveButton("全部入库") { _, _ ->
+                confirmed = true
+                reportLog(
+                    "multi_package_confirm_confirm", "确认批量入库 ${pkgs.size} 个订单",
+                    code = code, packageId = first.id, postingNumber = first.postingNumber, storeId = first.storeId,
+                    result = "info", extra = mapOf("count" to pkgs.size, "postingNumbers" to postingNumbers)
+                )
+                for (pkg in pkgs) {
+                    doShip(pkg.id, pkg.postingNumber, code, pkg.items?.firstOrNull()?.picUrl, pkg.storeId)
+                }
+            }
+            .setNegativeButton("取消", null)
+            .create()
+        dialog.setOnDismissListener {
+            dialogShowing = false
+            pendingCount = (pendingCount - 1).coerceAtLeast(0)
+            if (!confirmed) {
+                reportLog(
+                    "multi_package_confirm_cancel", "用户取消批量入库确认",
+                    code = code, packageId = first.id, postingNumber = first.postingNumber, storeId = first.storeId,
                     result = "warning"
                 )
             }
