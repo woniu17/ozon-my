@@ -23,7 +23,7 @@ const navGroups = [
       { key: '/carriage-manage', label: '发运管理' },
       { key: '/order-stats', label: '订单统计' },
       { key: '/finance-stats', label: '财务统计' },
-      { key: '/admin', label: '上架统计' },
+      { key: '/dashboard', label: '上架统计' },
     ],
   },
   {
@@ -110,7 +110,7 @@ const activeTab = computed(() => {
   if (p.startsWith('/stock-refresh/')) return '/stock-refresh-tasks';
   if (p.startsWith('/product-update/')) return '/product-update-tasks';
   if (p.startsWith('/product-archive/')) return '/product-archive-tasks';
-  return tabs.find((t) => p.startsWith(t.key))?.key || '/admin';
+  return tabs.find((t) => p.startsWith(t.key))?.key || '/order-process';
 });
 
 // 当前激活项所属分组

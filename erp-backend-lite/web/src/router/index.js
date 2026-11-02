@@ -42,7 +42,9 @@ const router = createRouter({
   routes: [
     { path: '/', redirect: '/admin' },
     { path: '/login', component: Login, meta: { public: true } },
-    { path: '/admin', component: Dashboard },
+    // 2026-11-08:admin#/admin 指向订单处理(登录默认落地页),上架统计改由 /dashboard 提供
+    { path: '/admin', redirect: '/order-process' },
+    { path: '/dashboard', name: 'dashboard', component: Dashboard, meta: { title: '上架统计' } },
     { path: '/stores', name: 'stores', component: Stores },
     { path: '/listings', name: 'listings', component: Listings },
     { path: '/collect-box-v2', name: 'collect-box-v2', component: CollectBoxV2 },
