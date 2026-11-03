@@ -1057,8 +1057,9 @@ class PurchaseActivity : ComponentActivity() {
     private fun canShipAfterSave(): Boolean {
         val p = pkg ?: return false
         // 2026-11:必须采购后才可入库——保存后 wait_process → wait_stock 再入库
+        // 2026-11-03:Ozon 已在后台流转到 awaiting_registration/awaiting_deliver 的订单,后端幂等返回已入库并推进本地
         return (p.operateStatus == "wait_process" || p.operateStatus == "wait_stock") &&
-            p.ozonStatus == "awaiting_packaging"
+            p.ozonStatus in setOf("awaiting_packaging", "awaiting_registration", "awaiting_deliver")
     }
 
     private fun dirty(): Boolean = pendingRemoves.isNotEmpty() || pendingAdd != null

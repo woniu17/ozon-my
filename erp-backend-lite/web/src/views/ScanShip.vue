@@ -300,10 +300,12 @@ function canReprintCard(pkg) {
     || pkg.operateStatus === 'delivering' || pkg.operateStatus === 'signed'
     || pkg.operateStatus === 'settled';
 }
-// 待入库卡片可「入库」(同 OrderProcess 行按钮口径;2026-11 必须采购后才可入库):Ozon 仍处于 awaiting_packaging
+// 待入库卡片可「入库」(同 OrderProcess 行按钮口径;2026-11 必须采购后才可入库):
+// Ozon awaiting_packaging 可直接 ship;awaiting_registration/awaiting_deliver 已在 Ozon 后台流转,后端幂等返回已入库并推进本地
 // 2026-10-23:解除搁置订单限制,允许入库(前端二次弹窗确认,保持搁置标记)
+const STOCKABLE_OZON_STATUSES = ['awaiting_packaging', 'awaiting_registration', 'awaiting_deliver'];
 function canShipPkg(pkg) {
-  return pkg.operateStatus === 'wait_stock' && pkg.ozonStatus === 'awaiting_packaging' && !!pkg.id;
+  return pkg.operateStatus === 'wait_stock' && STOCKABLE_OZON_STATUSES.includes(pkg.ozonStatus) && !!pkg.id;
 }
 // 非可操作卡片的拦截原因(置灰卡 + 横幅文案同源;仅 wait_stick 可操作,其余状态进入此分支)
 function blockReason(pkg) {

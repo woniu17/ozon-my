@@ -338,8 +338,9 @@ class StockScanFragment : Fragment() {
                 val resp = Api.parse<PackageListResponse>(data)
                 // 2026-11-08:同一采购快递单号可关联多个待入库订单,收集全部待入库订单
                 // (而非只取第一个),多个时弹窗确认后一次性全部入库,避免漏入。
+                // 2026-11-03:awaiting_registration/awaiting_deliver 已在 Ozon 后台流转,后端幂等返回已入库并推进本地,同样纳入待入库扫描
                 val pendingPkgs = resp.packages.filter {
-                    it.ozonStatus == "awaiting_packaging" && it.id.isNotEmpty()
+                    it.ozonStatus in setOf("awaiting_packaging", "awaiting_registration", "awaiting_deliver") && it.id.isNotEmpty()
                 }
                 if (pendingPkgs.isEmpty()) {
                     // 未命中待入库订单:只在视频区提示,不进记录列表

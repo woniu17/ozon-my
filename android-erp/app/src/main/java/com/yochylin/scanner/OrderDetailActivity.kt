@@ -1641,8 +1641,9 @@ class OrderDetailActivity : ComponentActivity() {
 
         // 搁置订单(2026-10-23):解除入库限制,点击时二次弹窗确认(用户确认后保持搁置)
         // 2026-11:必须采购后才可入库——仅待入库可点入库
-        val canShip = p.operateStatus == "wait_stock" &&
-            p.ozonStatus == "awaiting_packaging"
+        // 2026-11-03:Ozon 已在后台流转到 awaiting_registration/awaiting_deliver 的订单,后端幂等返回已入库并推进本地,按钮仍展示
+        val stockableOzonStatuses = setOf("awaiting_packaging", "awaiting_registration", "awaiting_deliver")
+        val canShip = p.operateStatus == "wait_stock" && p.ozonStatus in stockableOzonStatuses
         if (canShip) {
             dActionBar.addView(actionButton("入库") { onShip(p) })
         }

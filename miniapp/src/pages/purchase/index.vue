@@ -1516,12 +1516,13 @@ async function doSave(withShip = false) {
 
 // 保存后可入库:待采购(保存后流转待入库)或已待入库,且 Ozon 侧待打包
 // 2026-11:必须采购后才可入库——保存动作先把 wait_process → wait_stock 再入库(与 web 端 canShipAfterSave 同口径)
+// 2026-11-03:awaiting_registration/awaiting_deliver 已在 Ozon 后台流转,后端幂等返回已入库并推进本地
 const canShipAfterSave = computed(() => {
   const p = pkg.value;
   return (
     !!p &&
     (p.operateStatus === 'wait_process' || p.operateStatus === 'wait_stock') &&
-    p.ozonStatus === 'awaiting_packaging'
+    ['awaiting_packaging', 'awaiting_registration', 'awaiting_deliver'].includes(p.ozonStatus)
   );
 });
 

@@ -197,7 +197,8 @@ export function syncPackage(packageId) {
 }
 
 // 入库(列表行"入库"按钮):Ozon /v4/posting/fbs/ship 搜集订单(不拆分,单包裹全部商品)
-// 前置:本地 wait_stock + Ozon awaiting_packaging;已入库态幂等返回 alreadyShipped=true
+// 前置:本地 wait_stock;Ozon awaiting_packaging 直接 ship,
+//   awaiting_registration/awaiting_deliver(已在 Ozon 后台流转)幂等返回 alreadyShipped=true 并推进本地
 // 返回 { alreadyShipped, ozonStatus, substatus }
 export function shipPackage(packageId) {
   return request.post('/admin/api/order-process/ship', { packageId });

@@ -33,7 +33,8 @@ export function syncPackage(packageId) {
   return request.post('/admin/api/order-process/sync-package', { packageId });
 }
 
-// 入库(2026-11 新流程:仅 wait_stock 待入库可操作 + Ozon awaiting_packaging;已入库幂等返回 alreadyShipped)
+// 入库(2026-11 新流程:仅 wait_stock 待入库可操作;Ozon awaiting_packaging 直接 ship,
+//   awaiting_registration/awaiting_deliver 已在 Ozon 后台流转则幂等返回 alreadyShipped 并推进本地)
 export function shipPackage(packageId) {
   return request.post('/admin/api/order-process/ship', { packageId });
 }

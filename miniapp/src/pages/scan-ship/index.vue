@@ -885,7 +885,9 @@ function canReprintCard(pkg) {
     || pkg.operateStatus === 'settled';
 }
 function canShipPkg(pkg) {
-  return pkg.operateStatus === 'wait_stock' && pkg.ozonStatus === 'awaiting_packaging' && !!pkg.id;
+  // 2026-11-03:awaiting_registration/awaiting_deliver 已在 Ozon 后台流转,后端幂等返回已入库并推进本地
+  return pkg.operateStatus === 'wait_stock' &&
+    ['awaiting_packaging', 'awaiting_registration', 'awaiting_deliver'].includes(pkg.ozonStatus) && !!pkg.id;
 }
 function blockReason(pkg) {
   if (pkg.isIgnored) return '已搁置';

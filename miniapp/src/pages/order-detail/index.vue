@@ -559,11 +559,13 @@ const cancelReasonText = computed(() => {
   return CANCEL_REASON_LABELS[p.cancelReasonId] || p.cancelReason || '';
 });
 
-// 入库按钮显隐:仅待入库且 Ozon awaiting_packaging(与 web 端一致;2026-11 必须先采购后入库)
+// 入库按钮显隐:仅待入库且 Ozon 可入库(与 web 端一致;2026-11 必须先采购后入库)
+// 2026-11-03:awaiting_registration/awaiting_deliver 已在 Ozon 后台流转,后端幂等返回已入库并推进本地
+const STOCKABLE_OZON_STATUSES = ['awaiting_packaging', 'awaiting_registration', 'awaiting_deliver'];
 const canShip = computed(() => {
   const p = pkg.value;
   if (!p) return false;
-  return p.operateStatus === 'wait_stock' && p.ozonStatus === 'awaiting_packaging';
+  return p.operateStatus === 'wait_stock' && STOCKABLE_OZON_STATUSES.includes(p.ozonStatus);
 });
 
 const visibleTraces = computed(() => (traceOpen.value ? traces.value : traces.value.slice(0, 3)));

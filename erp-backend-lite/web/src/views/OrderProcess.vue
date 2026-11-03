@@ -970,11 +970,17 @@ function tabKeyForPlatform(platformVal) {
 
 // 采购弹窗打开时的原始行(「保存并入库」用:入库需要行级 operateStatus/ozonStatus/items/货件号)
 const purchaseRowCtx = ref(null);
-// 保存后可入库:待采购(保存后流转待入库)或已待入库,且 Ozon 侧待打包
+// 可入库的 Ozon 状态(2026-11-03):awaiting_packaging 可直接 ship;awaiting_registration/awaiting_deliver
+// 说明已在 Ozon 后台流转(如后台直接操作),后端对这两种状态幂等返回「已入库」并推进本地流转,按钮仍展示供补录
+const STOCKABLE_OZON_STATUSES = ['awaiting_packaging', 'awaiting_registration', 'awaiting_deliver'];
+function isStockableOzonStatus(p) {
+  return !!p && STOCKABLE_OZON_STATUSES.includes(p.ozonStatus);
+}
+// 保存后可入库:待采购(保存后流转待入库)或已待入库,且 Ozon 侧可入库
 // 2026-11:必须采购后才可入库——保存动作先把 wait_process → wait_stock 再入库
 const canShipAfterSave = computed(() => {
   const p = purchaseRowCtx.value;
-  return !!p && (p.operateStatus === 'wait_process' || p.operateStatus === 'wait_stock') && p.ozonStatus === 'awaiting_packaging';
+  return !!p && (p.operateStatus === 'wait_process' || p.operateStatus === 'wait_stock') && isStockableOzonStatus(p);
 });
 
 // ── 批量录采购(2026-09-28 v2):勾选多个包裹 → 选好采购订单 → 一次性关联全部目标包裹 ──
@@ -4110,10 +4116,10 @@ onUnmounted(() => {
                   @click="openPurchase(pkg)"
                 >采购</button>
                 <button
-                  v-if="pkg.operateStatus === 'wait_stock' && pkg.ozonStatus === 'awaiting_packaging'"
+                  v-if="pkg.operateStatus === 'wait_stock' && isStockableOzonStatus(pkg)"
                   class="btn btn-ghost btn-sm"
                   :disabled="shippingPkgId === pkg.id"
-                  :title="shippingPkgId === pkg.id ? '入库中…' : '向 Ozon 确认全部商品为一个货件(不拆分),入库后方可打印面单'"
+                  :title="shippingPkgId === pkg.id ? '入库中…' : (pkg.ozonStatus === 'awaiting_packaging' ? '向 Ozon 确认全部商品为一个货件(不拆分),入库后方可打印面单' : 'Ozon 已处于' + ozonStatus(pkg.ozonStatus) + ',点击补录本地入库并流转到待打单')"
                   @click="onShipPackage(pkg)"
                 >{{ shippingPkgId === pkg.id ? '入库中…' : '入库' }}</button>
                 <button

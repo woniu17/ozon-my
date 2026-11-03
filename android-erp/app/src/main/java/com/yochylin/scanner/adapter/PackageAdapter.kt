@@ -300,7 +300,10 @@ class PackageAdapter(private val callbacks: Callbacks) :
 
             // 搁置订单(2026-10-23):解除操作限制,允许入库/打单等,但点击时二次弹窗确认(用户确认后保持搁置)
             // 2026-11:必须采购后才可入库——仅待入库可入库;扫描打单仅待打单可称重打单(→待发运)
-            val canShipPkg = pkg.operateStatus == "wait_stock" && pkg.ozonStatus == "awaiting_packaging" && pkg.id.isNotEmpty()
+            // 2026-11-03:Ozon 已在后台流转到 awaiting_registration/awaiting_deliver 的订单,后端幂等返回已入库并推进本地
+            val canShipPkg = pkg.operateStatus == "wait_stock" &&
+                pkg.ozonStatus in setOf("awaiting_packaging", "awaiting_registration", "awaiting_deliver") &&
+                pkg.id.isNotEmpty()
             val canShipCard = pkg.operateStatus == "wait_stick"
             val canReprint = pkg.operateStatus == "wait_dispatch" || pkg.operateStatus == "dispatching"
                 || pkg.operateStatus == "delivering" || pkg.operateStatus == "signed"
