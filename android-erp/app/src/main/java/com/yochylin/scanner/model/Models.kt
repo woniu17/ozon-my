@@ -137,6 +137,9 @@ data class PkgItem(
     val offerId: String? = null,
     val price: Double? = null,
     val quantity: Double? = null,
+    // 本系统维护重量/Ozon后台重量(2026-11):订单详情页直接设置本系统重量
+    var customWeightG: Double? = null,
+    val ozonWeightG: Double? = null,
 )
 
 data class PurchaseLink(

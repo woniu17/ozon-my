@@ -8,7 +8,7 @@ import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue';
 import { parseUtcDate } from '../utils/time.js';
 import { useRoute } from 'vue-router';
 import {
-  getOrderTabs, getOrderList, getOrderDetail, getOrderDetailStock, setOrderItemStock,
+  getOrderTabs, getOrderList, getOrderDetail, getOrderDetailStock, setOrderItemStock, setOrderSkuWeight,
   submitPurchase, updatePurchaseLogistics, lookupPurchase, unlinkPurchase, clearPurchaseInfo, revertPackage, ignorePackage, markPrinted, fetchPackageLabel,
   updatePackageMeta, listPackageTags, updateTagOrder,
   runSync, runSyncAllList, getSyncStatus, getSyncProgress, dismissSyncProgress, getOrderSyncLogs,
@@ -3436,6 +3436,59 @@ async function setItemStock(pkg, it, stock) {
   }
 }
 
+// ── 本系统商品重量维护(2026-11):详情弹窗商品行直接设置/清除,无需跳转商品管理 ──
+// 与商品管理页 custom_weight_g 同一字段,参与包裹重量计算(无称重时优先于 Ozon 重量)。
+// change 事件触发(失焦/回车);空值=清除;保存后刷新详情使重量/利润/OGL 运费分析联动。
+async function onDetailItemWeightChange(it, event) {
+  if (!it.sku) {
+    show('该商品无 SKU,无法维护本系统重量', 'error');
+    return;
+  }
+  const raw = String(event.target.value || '').trim();
+  if (raw === '') {
+    if (it.customWeightG == null) return; // 本就为空,无变化
+    try {
+      await setOrderSkuWeight(it.sku, null);
+      it.customWeightG = null;
+      show(`已清除 ${it.sku} 的本系统重量,回退用 Ozon 重量`, 'success');
+      refreshDetail();
+    } catch (err) {
+      show(err.message || String(err), 'error');
+      event.target.value = it.customWeightG != null ? String(it.customWeightG) : '';
+    }
+    return;
+  }
+  const v = Number(raw);
+  if (!Number.isFinite(v) || v < 0) {
+    show('重量必须为非负数字', 'error');
+    event.target.value = it.customWeightG != null ? String(it.customWeightG) : '';
+    return;
+  }
+  if (it.customWeightG === v) return; // 无变化
+  try {
+    await setOrderSkuWeight(it.sku, v);
+    it.customWeightG = v;
+    show(`已设置 ${it.sku} 本系统重量 ${v}g`, 'success');
+    refreshDetail();
+  } catch (err) {
+    show(err.message || String(err), 'error');
+    event.target.value = it.customWeightG != null ? String(it.customWeightG) : '';
+  }
+}
+
+// 设置重量后刷新详情:包裹重量/利润/OGL 运费分析由后端按新重量重算
+async function refreshDetail() {
+  const pid = detail.value?.package?.id;
+  if (!pid) return;
+  try {
+    const d = await getOrderDetail(pid);
+    detail.value = d;
+    loadDetailStocks(pid);
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  }
+}
+
 let statusTimer = null;
 let tickTimer = null;
 const route = useRoute();
@@ -4735,7 +4788,7 @@ onUnmounted(() => {
         <div class="detail-section">订单产品</div>
         <table class="data-table item-table">
           <thead>
-            <tr><th style="width: 260px">产品</th><th>数量</th><th>售价</th><th>已采数量</th><th>采购金额(回写)</th><th>库存</th></tr>
+            <tr><th style="width: 260px">产品</th><th>数量</th><th>售价</th><th>已采数量</th><th>采购金额(回写)</th><th>库存</th><th>本系统重量</th></tr>
           </thead>
           <tbody>
             <tr v-for="it in detailItems" :key="it.id">
@@ -4762,6 +4815,26 @@ onUnmounted(() => {
                 </template>
                 <span v-else-if="detailStockLoading" class="muted">加载中…</span>
                 <span v-else class="muted">—</span>
+              </td>
+              <td class="weight-cell">
+                <!-- 本系统商品重量(2026-11):与商品管理页同一字段,空=未设置(回退 Ozon 重量) -->
+                <div class="weight-cell-main">
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    class="weight-input"
+                    :value="it.customWeightG ?? ''"
+                    :placeholder="it.ozonWeightG != null ? String(it.ozonWeightG) : '0'"
+                    title="输入克数后回车/失焦保存;清空=清除本系统重量"
+                    @change="onDetailItemWeightChange(it, $event)"
+                    @keydown.enter.prevent="($event) => $event.target.blur()"
+                  />
+                  <span class="weight-unit">g</span>
+                </div>
+                <div class="weight-cell-ozon" :title="it.ozonWeightG != null ? 'Ozon 后台同步重量' : 'Ozon 属性未同步重量'">
+                  Ozon {{ it.ozonWeightG != null ? it.ozonWeightG + 'g' : '—' }}
+                </div>
               </td>
             </tr>
           </tbody>
@@ -6479,6 +6552,35 @@ a.product-title:hover {
 
 .item-table {
   font-size: 12px;
+}
+
+/* 本系统商品重量列(2026-11):订单详情商品行直接维护,与商品管理页同字段 */
+.weight-cell-main {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.weight-input {
+  width: 72px;
+  padding: 3px 6px;
+  border: 1px solid var(--border, #d1d5db);
+  border-radius: 6px;
+  font-size: 12px;
+  text-align: right;
+}
+.weight-input:focus {
+  outline: none;
+  border-color: #4f7cff;
+}
+.weight-unit {
+  color: #6b7280;
+  font-size: 11px;
+}
+.weight-cell-ozon {
+  margin-top: 2px;
+  font-size: 11px;
+  color: #9ca3af;
 }
 
 .form-tip {

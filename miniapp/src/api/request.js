@@ -119,3 +119,7 @@ export function get(path, params) {
 export function post(path, body) {
   return request(path, { method: 'POST', body });
 }
+
+export function put(path, body) {
+  return request(path, { method: 'PUT', body });
+}

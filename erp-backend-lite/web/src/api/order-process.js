@@ -25,6 +25,11 @@ export function getOrderDetail(packageId) {
   return request.get('/admin/api/order-process/detail/' + encodeURIComponent(packageId));
 }
 
+// 设置/清除本系统商品重量(2026-11):weightG 为 null 时清除(回退 Ozon 重量)
+export function setOrderSkuWeight(sku, weightG) {
+  return request.put('/admin/api/order-process/sku-weight/' + encodeURIComponent(sku), { weightG });
+}
+
 // 订单商品库存(2026-10-17):返回 { stocks: [{ sku, offerId, productId, present, reserved, total }] }
 export function getOrderDetailStock(packageId) {
   return request.get('/admin/api/order-process/detail/' + encodeURIComponent(packageId) + '/stock');

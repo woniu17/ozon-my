@@ -30,6 +30,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
 import coil.load
+import java.net.URLEncoder
 import com.yochylin.scanner.adapter.countdownText
 import com.yochylin.scanner.adapter.fmtMoney
 import com.yochylin.scanner.adapter.fmtNum
@@ -474,6 +475,58 @@ class OrderDetailActivity : ComponentActivity() {
         }
     }
 
+    /** 设置/清除本系统商品重量(2026-11):弹窗输入,留空或点「清除」=清除本系统重量,保存后刷新详情联动重量/利润 */
+    private fun editSkuWeight(item: com.yochylin.scanner.model.PkgItem) {
+        val sku = item.sku
+        if (sku.isNullOrBlank()) {
+            toast("该商品无 SKU,无法维护重量")
+            return
+        }
+        val input = EditText(this).apply {
+            hint = "重量(g),留空清除"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setText(item.customWeightG?.let { fmtNum(it) } ?: "")
+        }
+        AlertDialog.Builder(this)
+            .setTitle("设置本系统重量")
+            .setMessage("SKU $sku\n" + (item.ozonWeightG?.let { "Ozon 后台重量 ${fmtNum(it)}g" } ?: "无 Ozon 后台重量"))
+            .setView(input)
+            .setPositiveButton("保存") { _, _ ->
+                val raw = input.text.toString().trim()
+                val g = if (raw.isEmpty()) null else raw.toDoubleOrNull()
+                if (raw.isNotEmpty() && (g == null || g < 0)) {
+                    toast("重量必须为非负数字")
+                    return@setPositiveButton
+                }
+                setSkuWeight(item, g)
+            }
+            .setNeutralButton("清除") { _, _ -> setSkuWeight(item, null) }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun setSkuWeight(item: com.yochylin.scanner.model.PkgItem, weightG: Double?) {
+        val sku = item.sku ?: return
+        lifecycleScope.launch {
+            try {
+                Api.put(
+                    "/admin/api/order-process/sku-weight/" + URLEncoder.encode(sku, "UTF-8"),
+                    mapOf("weightG" to weightG)
+                )
+                item.customWeightG = weightG
+                toast(if (weightG != null) "已设置 ${fmtNum(weightG)}g" else "已清除本系统重量")
+                loadDetail() // 刷新包裹重量/利润/OGL 运费分析
+            } catch (e: Exception) {
+                if (e is ApiException && e.code == 401) {
+                    toast("登录已过期,请重新登录")
+                    goLogin()
+                } else {
+                    toast(e.message ?: "设置重量失败")
+                }
+            }
+        }
+    }
+
     // ── 渲染 ──
     private fun render(detail: OrderDetail) {
         val p = detail.`package` ?: return
@@ -847,6 +900,28 @@ class OrderDetailActivity : ComponentActivity() {
             )
         }
         right.addView(stockRow)
+
+        // 本系统重量行(2026-11):展示当前系统维护重量 + Ozon 参考,点击设置/清除
+        val weightRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(6), 0, 0)
+        }
+        val weightTv = TextView(this).apply {
+            val custom = item.customWeightG?.let { "${fmtNum(it)}g" } ?: "—"
+            val ozon = item.ozonWeightG?.let { "${fmtNum(it)}g" } ?: "—"
+            text = "本系统 $custom · Ozon $ozon"
+            setTextColor(Color.parseColor(COLOR_TEXT))
+            textSize = 11f
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        weightRow.addView(weightTv)
+        weightRow.addView(
+            copyChip("设置", Color.parseColor("#fff7ed"), Color.parseColor("#d97706")) {
+                editSkuWeight(item)
+            }
+        )
+        right.addView(weightRow)
 
         // 跟卖快照行(2026-10-27):展示下单时的跟卖快照,对比出售价与跟卖
         val snap = item.sku?.trim()?.let { pwSnapMap[it] }

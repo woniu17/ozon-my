@@ -720,6 +720,36 @@ router.get('/admin/api/order-process/detail/:id', (req, res, next) => {
   }
 });
 
+// PUT /admin/api/order-process/sku-weight/:sku —— 设置/清除本系统商品重量(2026-11)
+// 与商品管理页 custom_weight_g 同一字段:参与订单重量计算(优先级高于 Ozon 后台重量),
+// 供 web/安卓/H5 三端订单详情按 SKU 直接维护,无需跳转商品管理。
+// body: { weightG: number|null }  null/空 = 清除本系统重量(回退 Ozon 重量)
+// SKU 尚未进入本地商品缓存时自动建占位记录(data='{}'),下次商品同步回填真实数据。
+router.put('/admin/api/order-process/sku-weight/:sku', (req, res, next) => {
+  try {
+    const sku = String(req.params.sku || '').trim();
+    if (!sku) return res.status(400).json({ ok: false, message: '需要 sku 参数' });
+    const raw = req.body?.weightG;
+    let weightG = null;
+    if (raw !== null && raw !== undefined && raw !== '') {
+      const v = Number(raw);
+      if (!Number.isFinite(v) || v < 0) {
+        return res.status(400).json({ ok: false, message: '重量必须为非负数字' });
+      }
+      weightG = v;
+    }
+    // 自动建占位记录(仅当 SKU 不存在时;不覆盖已同步的真实商品数据)
+    db.prepare(
+      `INSERT INTO product_data_cache (sku, data, store_id, fetched_at) VALUES (?, '{}', NULL, datetime('now'))
+       ON CONFLICT(sku) DO NOTHING`
+    ).run(sku);
+    db.prepare(`UPDATE product_data_cache SET custom_weight_g = ? WHERE sku = ?`).run(weightG, sku);
+    res.json(ok({ sku, customWeightG: weightG }));
+  } catch (e) {
+    next(e);
+  }
+});
+
 // GET /admin/api/order-process/purchase-history/:packageId —— 未采购订单"最近采购参考"(2026-10-28)
 // 按包裹商品 SKU 精确匹配历史采购单(最多5条),供未采购订单录入采购时参考最近价格/供应商/买家账号
 // 2026-10-29:由 offer_id 改为 SKU(同 SKU 可能因改款/变体有多个 offer_id,仅按 offer_id 会漏同款历史单)

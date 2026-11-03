@@ -128,6 +128,20 @@
             <text v-if="unitCostOf(it) != null" class="prod-alloc"> · 采购 {{ fmtMoney(unitCostOf(it)) }}</text>
             <text v-if="grossOf(it) != null" class="prod-gross" :class="grossOf(it) >= 0 ? 'profit-pos' : 'profit-neg'"> · 毛利/件 {{ fmtMoney(grossOf(it)) }}</text>
           </view>
+          <!-- 本系统重量维护(2026-11):直接设置该 SKU 本系统重量,参与包裹重量计算;留空=清除 -->
+          <view class="prod-sub prod-weight">
+            <text class="pw-label">本系统重量</text>
+            <input
+              class="weight-input"
+              type="number"
+              :value="it.customWeightG != null ? String(it.customWeightG) : ''"
+              :placeholder="it.ozonWeightG != null ? String(it.ozonWeightG) : '0'"
+              @blur="saveSkuWeight(it, $event)"
+              @confirm="saveSkuWeight(it, $event)"
+            />
+            <text class="weight-unit">g</text>
+            <text class="weight-ozon">Ozon {{ it.ozonWeightG != null ? it.ozonWeightG + 'g' : '—' }}</text>
+          </view>
           <!-- 跟卖快照(2026-11):下单时市场跟卖对比,三行:排名/最低价/中位数(有快照才显示) -->
           <view v-if="pwSnap[it.sku]" class="prod-pw">
             <view class="pw-line">
@@ -247,7 +261,7 @@
 <script setup>
 import { ref, reactive, computed, onUnmounted } from 'vue';
 import { onLoad, onShow, onHide, onUnload } from '@dcloudio/uni-app';
-import { getOrderDetail, getPriceWatchSnapshots, syncPackage, shipPackage, syncPackagePurchaseLogistics } from '../../api/order.js';
+import { getOrderDetail, getPriceWatchSnapshots, syncPackage, shipPackage, syncPackagePurchaseLogistics, setOrderSkuWeight } from '../../api/order.js';
 import { fmtMoney, fmtTime, fmtRate, weekdayCN } from '../../utils/fmt.js';
 
 const packageId = ref('');
@@ -721,6 +735,33 @@ function previewImg(url) {
   uni.previewImage({ urls: [url] });
 }
 
+// 设置/清除本系统商品重量(2026-11):blur/回车触发,留空=清除;保存后刷新详情联动重量/利润
+async function saveSkuWeight(it, e) {
+  if (!it.sku) {
+    uni.showToast({ title: '该商品无 SKU,无法维护重量', icon: 'none' });
+    return;
+  }
+  const raw = String(e.detail.value ?? '').trim();
+  let weightG = null;
+  if (raw !== '') {
+    const v = Number(raw);
+    if (!Number.isFinite(v) || v < 0) {
+      uni.showToast({ title: '重量必须为非负数字', icon: 'none' });
+      return;
+    }
+    weightG = v;
+  }
+  if ((weightG ?? null) === (it.customWeightG ?? null)) return; // 无变化
+  try {
+    await setOrderSkuWeight(it.sku, weightG);
+    it.customWeightG = weightG;
+    uni.showToast({ title: weightG != null ? `已设置 ${weightG}g` : '已清除本系统重量', icon: 'none' });
+    loadDetail(); // 刷新包裹重量/利润/OGL 运费分析
+  } catch (e2) {
+    /* request.js 已 toast */
+  }
+}
+
 onLoad((opts) => {
   packageId.value = String((opts && opts.id) || '');
   loadDetail();
@@ -1155,6 +1196,36 @@ onShow(() => {
 }
 .prod-gross {
   font-weight: 600;
+}
+
+/* 本系统重量维护(2026-11):行内输入,留空=清除(回退 Ozon 重量) */
+.prod-weight {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6rpx;
+}
+.prod-weight .pw-label {
+  color: #4e5969;
+}
+.weight-input {
+  width: 140rpx;
+  height: 44rpx;
+  padding: 0 12rpx;
+  border: 1rpx solid #d1d5db;
+  border-radius: 8rpx;
+  font-size: 22rpx;
+  color: #1f2329;
+  background: #fff;
+  text-align: right;
+}
+.weight-unit {
+  font-size: 20rpx;
+  color: #86909c;
+}
+.weight-ozon {
+  font-size: 20rpx;
+  color: #a6abb3;
 }
 
 /* 跟卖快照(2026-11):浅灰底圆角,三行对比 排名/最低价/中位数 */

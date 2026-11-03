@@ -1390,9 +1390,12 @@ function getItemsByOrderIds(orderIds) {
                 json_extract(p.data, '$.primary_image[0]'),
                 json_extract(p.data, '$.images[0]')
               ) AS pic_url,
-              json_extract(p.data, '$.name') AS cached_name
+              json_extract(p.data, '$.name') AS cached_name,
+              p.custom_weight_g AS custom_weight_g,
+              json_extract(pac.attributes_data, '$.weight') AS ozon_weight_g
        FROM op_ozon_order_item oi
        LEFT JOIN product_data_cache p ON p.sku = CAST(oi.sku AS TEXT)
+       LEFT JOIN product_attributes_cache pac ON pac.sku = CAST(oi.sku AS TEXT)
        WHERE oi.ozon_order_id IN (${ph})
        ORDER BY oi.id`
     )
@@ -1409,6 +1412,9 @@ function getItemsByOrderIds(orderIds) {
     pdpUrl: r.sku ? `https://ozon.ru/context/detail/id/${r.sku}` : null,
     purchaseAmount: r.purchase_amount,
     purchaseNum: r.purchase_num,
+    // 本系统维护重量/Ozon后台重量(2026-11):订单处理详情页按 SKU 设置本系统重量时展示
+    customWeightG: r.custom_weight_g != null ? Number(r.custom_weight_g) : null,
+    ozonWeightG: r.ozon_weight_g != null ? Number(r.ozon_weight_g) : null,
   }));
 }
 
