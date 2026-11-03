@@ -82,6 +82,7 @@ data class Pkg(
     val returnStateName: String? = null,
     val cancelReasonId: Int? = null,
     val cancelReason: String? = null,
+    val cancelledAfterShip: Boolean? = null,  // 取消发生在发货后(true=发货后取消,false=发货前取消;仅 cancelled 状态有)
     val splitAnalysis: SplitAnalysis? = null, // OGL 拆包省钱分析(2026-11)
 )
 
