@@ -434,62 +434,124 @@ fun Context.buildMultiItemConfirmDialog(
     if (sa != null && sa.applicable) {
         val eligible = sa.splitEligible
         val saving = sa.saving
-        val splitText: String
         val note: String
         val mainColor: Int
         val bgColor: Int
+        val conclusion: String?
         when {
             !eligible -> {
-                splitText = "整件运费 ${fmtMoney(sa.whole?.deliveryCny)}"
                 note = when (sa.reason) {
                     "multi_sku" -> "多SKU"
                     "too_many_units" -> "件数过多"
                     else -> "不可拆"
                 }
+                conclusion = null
                 mainColor = 0xFF165DFF.toInt()
                 bgColor = 0xFFEEF4FF.toInt()
             }
             saving -> {
-                splitText = "拆${sa.packagesCount}包省 ${fmtMoney(sa.saveCny)}"
                 note = if (sa.operable) "可拆包" else "已发货"
+                conclusion = "拆${sa.packagesCount}包省 ${fmtMoney(sa.saveCny)}"
                 mainColor = 0xFF00B42A.toInt()
                 bgColor = 0xFFE8FFEA.toInt()
             }
             else -> {
-                splitText = "整件更省 · 拆${sa.packagesCount}包贵 ${fmtMoney(Math.abs(sa.saveCny ?: 0.0))}"
                 note = if (sa.operable) "可拆包" else "已发货"
+                conclusion = "整件更省 · 拆${sa.packagesCount}包贵 ${fmtMoney(Math.abs(sa.saveCny ?: 0.0))}"
                 mainColor = 0xFFD97706.toInt()
                 bgColor = 0xFFFFF7E6.toInt()
             }
         }
-        val formula = sa.formula ?: sa.whole?.formula
+
+        // 费用行:左标签 + 右金额
+        fun costRow(label: String, amount: String?): LinearLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(TextView(this@buildMultiItemConfirmDialog).apply {
+                text = label
+                textSize = 13f
+                setTextColor(0xFF1D2129.toInt())
+            })
+            addView(View(this@buildMultiItemConfirmDialog), LinearLayout.LayoutParams(0, 1, 1f))
+            addView(TextView(this@buildMultiItemConfirmDialog).apply {
+                text = amount ?: "—"
+                textSize = 13f
+                setTextColor(0xFF1D2129.toInt())
+                setTypeface(null, Typeface.BOLD)
+            })
+        }
+        fun formulaTv(text: String?): TextView = TextView(this).apply {
+            this.text = text
+            textSize = 11f
+            setTextColor(0xFF86909C.toInt())
+        }
 
         splitSection.visibility = View.VISIBLE
         splitSection.setRoundedBg(bgColor, 10f)
         splitSection.setPadding(dp(12), dp(10), dp(12), dp(10))
-        splitSection.addView(TextView(this).apply {
-            text = splitText
-            textSize = 14f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(mainColor)
-        })
-        splitSection.addView(TextView(this).apply {
-            text = note
-            textSize = 11f
-            setTextColor(0xFF86909C.toInt())
-        }, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.WRAP_CONTENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply { topMargin = dp(4) })
-        if (!formula.isNullOrBlank()) {
-            splitSection.addView(TextView(this).apply {
-                text = formula
+
+        // 头部:拆单建议 + 状态标签
+        splitSection.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(TextView(this@buildMultiItemConfirmDialog).apply {
+                text = "拆单建议"
+                textSize = 13f
+                setTextColor(0xFF1D2129.toInt())
+                setTypeface(null, Typeface.BOLD)
+            })
+            addView(View(this@buildMultiItemConfirmDialog), LinearLayout.LayoutParams(0, 1, 1f))
+            addView(TextView(this@buildMultiItemConfirmDialog).apply {
+                text = note
                 textSize = 11f
                 setTextColor(0xFF86909C.toInt())
-            }, LinearLayout.LayoutParams(
+            })
+        })
+
+        // 不拆包费用
+        splitSection.addView(costRow("不拆包（整件）", fmtMoney(sa.whole?.deliveryCny)), LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(8) })
+        if (!sa.whole?.formula.isNullOrBlank()) {
+            splitSection.addView(formulaTv(sa.whole?.formula), LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = dp(6) })
+            ).apply { topMargin = dp(2) })
+        }
+
+        // 拆包费用(仅可拆订单)
+        if (eligible) {
+            splitSection.addView(View(this).apply {
+                setBackgroundColor(0x1486909C)
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(1)
+            ).apply { topMargin = dp(8) })
+            splitSection.addView(costRow(
+                sa.packagesCount?.let { "拆${it}包" } ?: "拆包",
+                fmtMoney(sa.best?.totalCny)
+            ), LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(8) })
+            if (!sa.formula.isNullOrBlank()) {
+                splitSection.addView(formulaTv(sa.formula), LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(2) })
+            }
+            if (conclusion != null) {
+                splitSection.addView(TextView(this).apply {
+                    text = conclusion
+                    textSize = 13f
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(mainColor)
+                }, LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(8) })
+            }
         }
     }
 
