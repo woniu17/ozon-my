@@ -30,15 +30,16 @@
       <view v-if="pkg.profit" class="profit-strip">
         <view class="profit-cell">
           <text class="profit-k">订单金额</text>
-          <text class="profit-v">¥{{ fmtMoney(pkg.orderAmount) }}</text>
+          <!-- fmtMoney 自带 ¥ 前缀,不再拼字面 ¥(2026-11-03) -->
+          <text class="profit-v">{{ fmtMoney(pkg.orderAmount) }}</text>
         </view>
         <view class="profit-cell">
           <text class="profit-k">采购合计</text>
-          <text class="profit-v">¥{{ fmtMoney(pkg.totalPurchaseAmount) }}</text>
+          <text class="profit-v">{{ fmtMoney(pkg.totalPurchaseAmount) }}</text>
         </view>
         <view class="profit-cell">
           <text class="profit-k">{{ profitLabel(pkg) }}</text>
-          <text class="profit-v" :class="profitClass(pkg)">¥{{ fmtMoney(pkg.profit.profit) }}</text>
+          <text class="profit-v" :class="profitClass(pkg)">{{ fmtMoney(pkg.profit.profit) }}</text>
         </view>
         <view v-if="pkg.profit.profitRateCost != null" class="profit-cell">
           <text class="profit-k">成本利润率</text>

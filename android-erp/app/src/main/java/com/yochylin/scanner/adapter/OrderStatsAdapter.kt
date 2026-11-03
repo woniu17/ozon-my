@@ -70,7 +70,8 @@ class OrderStatsAdapter : RecyclerView.Adapter<OrderStatsAdapter.VH>() {
 
             val value = TextView(context).apply {
                 text = buildString {
-                    append(ca?.count ?: 0).append(" 单 · ¥")
+                    // fmtMoney 自带 ¥ 前缀,不再拼字面 ¥(2026-11-03)
+                    append(ca?.count ?: 0).append(" 单 · ")
                     append(fmtMoney(ca?.amount))
                 }
                 setTextColor(Color.parseColor(S_COLOR_TEXT))
@@ -81,7 +82,7 @@ class OrderStatsAdapter : RecyclerView.Adapter<OrderStatsAdapter.VH>() {
 
             if (showValid && ca?.validAmount != null) {
                 val valid = TextView(context).apply {
-                    text = "剔除取消 ¥${fmtMoney(ca.validAmount)}"
+                    text = "剔除取消 ${fmtMoney(ca.validAmount)}"
                     setTextColor(Color.parseColor(S_COLOR_PRIMARY))
                     textSize = 10f
                     layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {

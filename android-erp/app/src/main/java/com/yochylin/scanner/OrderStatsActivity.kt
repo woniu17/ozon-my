@@ -448,9 +448,9 @@ class OrderStatsActivity : ComponentActivity() {
                 setPadding(0, dp(8).toInt(), 0, 0)
             })
 
-            // 金额
+            // 金额(fmtMoney 自带 ¥ 前缀,不再拼字面 ¥;2026-11-03)
             addView(TextView(ctx).apply {
-                text = "¥ ${fmtMoney(ca?.amount)}"
+                text = fmtMoney(ca?.amount)
                 setTextColor(Color.parseColor(COLOR_PRIMARY))
                 textSize = 13f
                 typeface = android.graphics.Typeface.MONOSPACE
@@ -460,7 +460,7 @@ class OrderStatsActivity : ComponentActivity() {
             // 剔除取消（仅新订单）
             if (showValid && ca?.validAmount != null) {
                 addView(TextView(ctx).apply {
-                    text = "剔除取消 ¥ ${fmtMoney(ca.validAmount)}"
+                    text = "剔除取消 ${fmtMoney(ca.validAmount)}"
                     setTextColor(Color.parseColor(COLOR_MUTE))
                     textSize = 10f
                     setPadding(0, dp(4).toInt(), 0, 0)

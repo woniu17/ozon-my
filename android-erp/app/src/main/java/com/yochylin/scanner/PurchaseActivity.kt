@@ -900,7 +900,8 @@ class PurchaseActivity : ComponentActivity() {
         val spec = TextView(this).apply {
             text = buildString {
                 if (!pi.spec.isNullOrBlank()) append(pi.spec).append(" · ")
-                append("¥").append(pi.price?.let { fmtMoney(it) } ?: "—")
+                // fmtMoney 自带 ¥ 前缀,不再拼字面 ¥(2026-11-03)
+                append(pi.price?.let { fmtMoney(it) } ?: "—")
                 append(" × ").append(fmtNum(pi.number ?: pi.num ?: 1.0))
             }
             setTextColor(Color.parseColor(COLOR_MUTE))

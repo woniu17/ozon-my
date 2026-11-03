@@ -652,23 +652,38 @@ class OrderDetailActivity : ComponentActivity() {
         dSplitAnalysisCard.visibility = View.VISIBLE
         dSplitAnalysisCard.setBackgroundColor(Color.parseColor(if (sa.operable) "#e8ffea" else "#f4faf5"))
 
+        // 2026-11-03:标题去掉字面 ¥(fmtMoney 已带 ¥);saving 且 saveCny>0 才显示「可省」,否则「贵 X,不拆比较好」
+        val saving = sa.saving == true && (sa.saveCny ?: 0.0) > 0
         val head = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         val title = TextView(this).apply {
-            text = "拆${sa.packagesCount ?: 0}包可省 ¥${fmtMoney(sa.saveCny)}"
-            setTextColor(Color.parseColor("#0b7a2d"))
+            text = when {
+                !sa.splitEligible -> "整件运费 ${fmtMoney(sa.whole?.deliveryCny)}"
+                saving -> "拆${sa.packagesCount ?: 0}包可省 ${fmtMoney(sa.saveCny)}"
+                else -> "拆${sa.packagesCount ?: 0}包贵 ${fmtMoney(Math.abs(sa.saveCny ?: 0.0))},不拆比较好"
+            }
+            setTextColor(Color.parseColor(if (saving) "#0b7a2d" else "#b45309"))
             textSize = 13f
             setTypeface(null, android.graphics.Typeface.BOLD)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
         head.addView(title)
         val status = TextView(this).apply {
-            text = if (sa.operable) "可拆包" else "已发货"
-            setTextColor(Color.parseColor(if (sa.operable) "#0b7a2d" else "#86909c"))
+            text = when {
+                !sa.splitEligible -> when (sa.reason) {
+                    "multi_sku" -> "多SKU"
+                    "too_many_units" -> "件数过多"
+                    "single_unit" -> "单件"
+                    else -> "不可拆"
+                }
+                sa.operable -> "可拆包"
+                else -> "已发货"
+            }
+            setTextColor(Color.parseColor(if (sa.operable && sa.splitEligible) "#0b7a2d" else "#86909c"))
             textSize = 10f
-            setRoundedBg(Color.parseColor(if (sa.operable) "#d3f5d9" else "#f2f3f5"), 6f)
+            setRoundedBg(Color.parseColor(if (sa.operable && sa.splitEligible) "#d3f5d9" else "#f2f3f5"), 6f)
             setPadding(dp(8), dp(3), dp(8), dp(3))
         }
         head.addView(status)
@@ -680,7 +695,7 @@ class OrderDetailActivity : ComponentActivity() {
         for ((i, sp) in (sa.best?.packages.orEmpty()).withIndex()) {
             dSplitAnalysisCard.addView(
                 splitBlock(
-                    "包${i + 1} · ${sp.units}件(${sp.weightG}g, ¥${fmtMoney(sp.valueCny)}) · ${sp.groupName ?: ""}档",
+                    "包${i + 1} · ${sp.units}件(${sp.weightG}g, ${fmtMoney(sp.valueCny)}) · ${sp.groupName ?: ""}档",
                     sp.formula ?: "",
                     green = true
                 )
@@ -1385,7 +1400,8 @@ class OrderDetailActivity : ComponentActivity() {
         val spec = TextView(this).apply {
             text = buildString {
                 if (!pi.spec.isNullOrBlank()) append(pi.spec).append(" · ")
-                append("¥").append(pi.price?.let { fmtMoney(it) } ?: "—")
+                // fmtMoney 自带 ¥ 前缀,不再拼字面 ¥(2026-11-03)
+                append(pi.price?.let { fmtMoney(it) } ?: "—")
                 append(" × ").append(fmtNum(pi.number ?: pi.num ?: 1.0))
             }
             setTextColor(Color.parseColor(COLOR_MUTE))
