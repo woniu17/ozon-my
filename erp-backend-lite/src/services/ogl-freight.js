@@ -208,7 +208,8 @@ export function analyzeOglSplit({
     saving,
     saveCny: best ? best.saveCny : null,
     packagesCount: best ? best.packages.length : null,
-    formula: best ? best.packages.map((p, i) => `包${i + 1} ${p.formula}`).join(' ＋ ') + ` = ¥${best.totalCny.toFixed(2)}` : null,
+    // 合计公式(2026-11-03 简化):每包公式已在前端逐包展示,这里只保留「包1 + 包2 = 总额」
+    formula: best ? `包${best.packages.map((_, i) => i + 1).join(' + 包')} = ¥${best.totalCny.toFixed(2)}` : null,
   };
 }
 

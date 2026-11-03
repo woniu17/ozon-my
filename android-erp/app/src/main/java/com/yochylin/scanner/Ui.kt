@@ -433,7 +433,8 @@ fun Context.buildMultiItemConfirmDialog(
     val sa = pkg.splitAnalysis
     if (sa != null && sa.applicable) {
         val eligible = sa.splitEligible
-        val saving = sa.saving
+        // 拆包是否省钱:后端 saving 与 saveCny 同源,这里再防御一次(saveCny<=0 视为不省)
+        val saving = sa.saving && (sa.saveCny ?: 0.0) > 0
         val note: String
         val mainColor: Int
         val bgColor: Int

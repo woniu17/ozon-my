@@ -2967,25 +2967,29 @@ function othersTitle(pkg) {
   return '无应计数据(未妥投或 Ozon 未生成)';
 }
 // ── OGL 运费/拆包分析展示(2026-11):三种结论——拆包省钱 / 整件更省 / 不可拆只展示整件 ──
+// 拆包是否省钱:后端 saving 与 saveCny 同源,这里再防御一次(saveCny<=0 视为不省)
+function isSplitSaving(sa) {
+  return !!sa && sa.saving === true && (sa.saveCny || 0) > 0;
+}
 function splitAnalysisCls(pkg) {
   const sa = pkg.splitAnalysis;
   if (!sa) return '';
   if (!sa.splitEligible) return 'split-save-info';
-  return sa.saving ? 'split-save-save' : 'split-save-worse';
+  return isSplitSaving(sa) ? 'split-save-save' : 'split-save-worse';
 }
 function splitAnalysisLabel(pkg) {
   const sa = pkg.splitAnalysis;
   if (!sa) return '';
   if (!sa.splitEligible) return '整件运费';
-  if (sa.saving) return sa.operable ? '💡拆包省钱' : '拆包省钱';
+  if (isSplitSaving(sa)) return sa.operable ? '💡拆包省钱' : '拆包省钱';
   return '整件更省';
 }
 function splitAnalysisText(pkg) {
   const sa = pkg.splitAnalysis;
   if (!sa) return '';
   if (!sa.splitEligible) return fmtMoney(sa.whole?.deliveryCny);
-  if (sa.saving) return `拆${sa.packagesCount}包省 ¥${fmtMoney(sa.saveCny)}`;
-  return `拆${sa.packagesCount}包贵 ¥${fmtMoney(Math.abs(sa.saveCny))}`;
+  if (isSplitSaving(sa)) return `拆${sa.packagesCount}包省 ${fmtMoney(sa.saveCny)}`;
+  return `拆${sa.packagesCount}包贵 ${fmtMoney(Math.abs(sa.saveCny || 0))}`;
 }
 // OGL 运费悬浮:整件/拆包完整公式 + 结论 + 是否仍可操作
 function splitAnalysisTitle(pkg) {
@@ -2995,9 +2999,9 @@ function splitAnalysisTitle(pkg) {
   lines.push(`不拆(整件 ${sa.whole.groupName}): ${sa.whole.formula}`);
   if (sa.splitEligible) {
     lines.push(`拆 ${sa.packagesCount} 包: ${sa.formula}`);
-    lines.push(sa.saving
-      ? `可省 ¥${fmtMoney(sa.saveCny)},建议拆包`
-      : `拆包反而贵 ¥${fmtMoney(Math.abs(sa.saveCny))},建议整件发出`);
+    lines.push(isSplitSaving(sa)
+      ? `可省 ${fmtMoney(sa.saveCny)},建议拆包`
+      : `拆包反而贵 ${fmtMoney(Math.abs(sa.saveCny || 0))},建议整件发出`);
     lines.push(sa.operable ? '当前状态仍可拆包(发货前)' : '已发货/交运,无法再拆(仅参考)');
   } else {
     lines.push(sa.reason === 'single_unit' ? '单件订单,无拆包空间'
@@ -3025,16 +3029,16 @@ function splitDetailStatusCls(pkg) {
 function splitDetailConclusionLabel(pkg) {
   const sa = pkg.splitAnalysis;
   if (!sa) return '';
-  if (!sa.splitEligible) return `整件运费 ¥${fmtMoney(sa.whole?.deliveryCny)}`;
-  return sa.saving
-    ? `拆${sa.packagesCount}包可省 ¥${fmtMoney(sa.saveCny)}`
-    : `拆${sa.packagesCount}包贵 ¥${fmtMoney(Math.abs(sa.saveCny))},建议整件`;
+  if (!sa.splitEligible) return `整件运费 ${fmtMoney(sa.whole?.deliveryCny)}`;
+  return isSplitSaving(sa)
+    ? `拆${sa.packagesCount}包可省 ${fmtMoney(sa.saveCny)}`
+    : `拆${sa.packagesCount}包贵 ${fmtMoney(Math.abs(sa.saveCny || 0))},不拆比较好`;
 }
 function splitDetailConclusionCls(pkg) {
   const sa = pkg.splitAnalysis;
   if (!sa) return '';
   if (!sa.splitEligible) return 'tag-mute';
-  return sa.saving ? 'split-tag-save' : 'split-tag-worse';
+  return isSplitSaving(sa) ? 'split-tag-save' : 'split-tag-worse';
 }
 
 function profitLabel(pkg) {

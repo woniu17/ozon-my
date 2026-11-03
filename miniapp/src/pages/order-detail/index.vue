@@ -418,10 +418,14 @@ function profitClass(p) {
 }
 
 // ── OGL 运费/拆包分析展示(2026-11):三种结论——拆包省钱/整件更省/不可拆只展示整件 ──
+// 拆包是否省钱:后端 saving 与 saveCny 同源,这里再防御一次(saveCny<=0 视为不省)
+function detailSplitSaving(sa) {
+  return !!sa && sa.saving === true && (sa.saveCny || 0) > 0;
+}
 function detailSplitCls(pkg) {
   const sa = pkg?.splitAnalysis;
   if (!sa || !sa.splitEligible) return 'info';
-  return sa.saving ? 'save' : 'worse';
+  return detailSplitSaving(sa) ? 'save' : 'worse';
 }
 function detailSplitStatusLabel(pkg) {
   const sa = pkg?.splitAnalysis;
@@ -439,9 +443,9 @@ function detailSplitStatusCls(pkg) {
 function detailSplitConclusion(pkg) {
   const sa = pkg?.splitAnalysis;
   if (!sa) return '';
-  if (!sa.splitEligible) return `整件运费 ¥${fmtMoney(sa.whole?.deliveryCny)}`;
-  if (sa.saving) return `拆${sa.packagesCount}包可省 ¥${fmtMoney(sa.saveCny)}`;
-  return `拆${sa.packagesCount}包贵 ¥${fmtMoney(Math.abs(sa.saveCny))},建议整件`;
+  if (!sa.splitEligible) return `整件运费 ${fmtMoney(sa.whole?.deliveryCny)}`;
+  if (detailSplitSaving(sa)) return `拆${sa.packagesCount}包可省 ${fmtMoney(sa.saveCny)}`;
+  return `拆${sa.packagesCount}包贵 ${fmtMoney(Math.abs(sa.saveCny || 0))},不拆比较好`;
 }
 
 // ── 商品行单件口径(2026-10-13:采购分摊按 itemId 聚合,与采购页一致)────────
