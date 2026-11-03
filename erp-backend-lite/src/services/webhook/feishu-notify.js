@@ -447,33 +447,55 @@ function buildProductLines(products) {
   return lines.join('\n');
 }
 
-/** 从 ozon_postings.products_json 取商品明细(取消/状态变化/揽收推送无商品字段) */
+/**
+ * 从本地库取商品明细(取消/状态变化/揽收推送无商品字段)
+ * 数据源优先级:
+ *  ① ozon_postings.products_json(webhook NEW_POSTING 落库,含 OPI 回拉补全的完整字段)
+ *  ② op_ozon_order_item(API 轮询 syncPosting 无论 webhook 是否处理过都会写入,
+ *    2026-11-03 新增:webhook 新订单推送丢失的货件也保证取消/状态通知带商品明细)
+ */
 function loadProductsFromDb(postingNumber) {
   try {
     const row = getDb()
       .prepare('SELECT products_json FROM ozon_postings WHERE posting_number = ?')
       .get(postingNumber);
-    if (!row?.products_json) return null;
-    const arr = JSON.parse(row.products_json);
-    if (!Array.isArray(arr) || !arr.length) return null;
-    // 单价兜底(2026-09-19):NEW_POSTING 时 OPI 回拉失败会落「无 price」的原始推送形态,
-    // 从 erp 订单表(op_ozon_order_item,CNY 单价)回填,避免通知明细单价显示 —
-    const hasMissingPrice = arr.some((p) => !(typeof p?.price === 'object' ? p?.price?.amount : p?.price));
-    if (hasMissingPrice) {
-      const items = getDb().prepare(
-        `SELECT oi.sku, oi.price FROM op_ozon_order o
-         JOIN op_ozon_order_item oi ON oi.ozon_order_id = o.id
-         WHERE o.posting_number = ? AND o.currency = 'CNY' AND oi.price IS NOT NULL`
-      ).all(postingNumber);
-      const priceMap = new Map(items.map((it) => [String(it.sku), it.price]));
-      for (const p of arr) {
-        const cur = typeof p?.price === 'object' ? p?.price?.amount : p?.price;
-        if (!cur && priceMap.has(String(p.sku))) {
-          p.price = { amount: priceMap.get(String(p.sku)), currency_code: 'CNY' };
+    if (row?.products_json) {
+      const arr = JSON.parse(row.products_json);
+      if (Array.isArray(arr) && arr.length) {
+        // 单价兜底(2026-09-19):NEW_POSTING 时 OPI 回拉失败会落「无 price」的原始推送形态,
+        // 从 erp 订单表(op_ozon_order_item,CNY 单价)回填,避免通知明细单价显示 —
+        const hasMissingPrice = arr.some((p) => !(typeof p?.price === 'object' ? p?.price?.amount : p?.price));
+        if (hasMissingPrice) {
+          const items = getDb().prepare(
+            `SELECT oi.sku, oi.price FROM op_ozon_order o
+             JOIN op_ozon_order_item oi ON oi.ozon_order_id = o.id
+             WHERE o.posting_number = ? AND o.currency = 'CNY' AND oi.price IS NOT NULL`
+          ).all(postingNumber);
+          const priceMap = new Map(items.map((it) => [String(it.sku), it.price]));
+          for (const p of arr) {
+            const cur = typeof p?.price === 'object' ? p?.price?.amount : p?.price;
+            if (!cur && priceMap.has(String(p.sku))) {
+              p.price = { amount: priceMap.get(String(p.sku)), currency_code: 'CNY' };
+            }
+          }
         }
+        return arr;
       }
     }
-    return arr;
+    // ② 兜底:products_json 缺失/为空(webhook NEW_POSTING 未处理过)→ 从业务订单明细重建
+    const items = getDb().prepare(
+      `SELECT oi.sku, oi.offer_id, oi.quantity, oi.price, oi.currency_code
+       FROM op_ozon_order o
+       JOIN op_ozon_order_item oi ON oi.ozon_order_id = o.id
+       WHERE o.posting_number = ?`
+    ).all(postingNumber);
+    if (!items.length) return null;
+    return items.map((it) => ({
+      sku: String(it.sku),
+      offer_id: it.offer_id ?? null,
+      quantity: Number(it.quantity) || 1,
+      price: it.price != null ? { amount: Number(it.price), currency_code: it.currency_code || 'CNY' } : null,
+    }));
   } catch {
     return null;
   }
