@@ -670,6 +670,209 @@ fun Context.buildMultiItemConfirmDialog(
     return dialog
 }
 
+/** 同一采购快递单关联多个待入库订单：弹窗逐单展示商品图片/明细（对齐单订单确认框），确认后一次性全部入库(2026-11-08) */
+fun Context.buildMultiPackageConfirmDialog(
+    pkgs: List<Pkg>,
+    courierNo: String,
+    confirmText: String = "全部入库",
+    onConfirm: () -> Unit,
+): Dialog {
+    val density = resources.displayMetrics.density
+    fun dp(v: Int) = (v * density + 0.5f).toInt()
+
+    val inflater = LayoutInflater.from(this)
+    val totalQty = pkgs.sumOf { pkg -> pkg.items?.sumOf { it.quantity ?: 0.0 } ?: 0.0 }.toLong()
+
+    // ── 订单卡片列表:每单包含货件号/店铺/件数 + 商品图片与明细(复用 item_product 行) ──
+    val pkgContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+    for (pkg in pkgs) {
+        val pkgQty = (pkg.items?.sumOf { it.quantity ?: 0.0 } ?: 0.0).toLong()
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setRoundedBg(0xFFF7F8FA.toInt(), 10f)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+        }
+        // 卡片头部:货件号 + 总件数
+        card.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(TextView(this@buildMultiPackageConfirmDialog).apply {
+                text = pkg.postingNumber ?: pkg.id
+                textSize = 14f
+                setTextColor(0xFF1D2129.toInt())
+                setTypeface(null, Typeface.BOLD)
+                setMaxLines(1)
+                ellipsize = TextUtils.TruncateAt.MIDDLE
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(TextView(this@buildMultiPackageConfirmDialog).apply {
+                text = "共 $pkgQty 件"
+                textSize = 12f
+                setTextColor(0xFF1D2129.toInt())
+                setTypeface(null, Typeface.BOLD)
+            })
+        })
+        // 店铺名
+        if (!pkg.storeName.isNullOrBlank()) {
+            card.addView(TextView(this@buildMultiPackageConfirmDialog).apply {
+                text = pkg.storeName
+                textSize = 12f
+                setTextColor(0xFF4E5969.toInt())
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(2) })
+        }
+        // 商品明细
+        val items = pkg.items.orEmpty()
+        if (items.isEmpty()) {
+            card.addView(TextView(this@buildMultiPackageConfirmDialog).apply {
+                text = "无商品信息"
+                textSize = 12f
+                setTextColor(0xFF86909C.toInt())
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(6) })
+        } else {
+            for (item in items) {
+                val row = inflater.inflate(R.layout.item_product, card, false) as LinearLayout
+                val img: ImageView = row.findViewById(R.id.prodImg)
+                val titleTv: TextView = row.findViewById(R.id.prodTitle)
+                val skuTv: TextView = row.findViewById(R.id.prodSku)
+                val offerTv: TextView = row.findViewById(R.id.prodOffer)
+                val priceTv: TextView = row.findViewById(R.id.prodPrice)
+
+                val picUrl = item.picUrl
+                if (picUrl.isNullOrBlank()) {
+                    img.setImageDrawable(null)
+                } else {
+                    img.load(if (picUrl.startsWith("/")) Api.BASE_URL + picUrl else picUrl)
+                }
+                titleTv.text = item.title ?: "—"
+                skuTv.text = "SKU:${item.sku ?: "—"}"
+                offerTv.text = "Offer ID:${item.offerId ?: "—"}"
+                priceTv.text = buildString {
+                    append("单价 ").append(fmtMoney(item.price))
+                    append(" ×").append(fmtNum(item.quantity))
+                }
+                card.addView(row)
+            }
+        }
+        pkgContainer.addView(card, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(10) })
+    }
+
+    // ── 内容区(滚动):订单卡片 + 确认提示 ──
+    val body = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        addView(pkgContainer)
+        addView(TextView(this@buildMultiPackageConfirmDialog).apply {
+            text = "将向 Ozon 确认全部订单为一个货件（不拆分），是否全部入库？"
+            textSize = 12f
+            setTextColor(0xFF86909C.toInt())
+        }, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(12) })
+    }
+    val contentScroll = MaxHeightScrollView(this, (resources.displayMetrics.heightPixels * 0.5).toInt()).apply {
+        isVerticalScrollBarEnabled = false
+        overScrollMode = View.OVER_SCROLL_NEVER
+        addView(body)
+    }
+
+    // ── 头部:快递单号 + 关联订单数/总件数 ──
+    val header = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        addView(TextView(this@buildMultiPackageConfirmDialog).apply {
+            text = "快递单 $courierNo"
+            textSize = 17f
+            setTextColor(0xFF1D2129.toInt())
+            setTypeface(null, Typeface.BOLD)
+            setMaxLines(1)
+            ellipsize = TextUtils.TruncateAt.MIDDLE
+        })
+        addView(LinearLayout(this@buildMultiPackageConfirmDialog).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(TextView(this@buildMultiPackageConfirmDialog).apply {
+                text = "关联 ${pkgs.size} 个待入库订单"
+                textSize = 12f
+                setTextColor(0xFF4E5969.toInt())
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(TextView(this@buildMultiPackageConfirmDialog).apply {
+                text = "共 $totalQty 件"
+                textSize = 12f
+                setTextColor(0xFF1D2129.toInt())
+                setTypeface(null, Typeface.BOLD)
+            })
+        }, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(6) })
+    }
+
+    // ── 按钮行 ──
+    val cancelBtn = TextView(this).apply {
+        text = "取消"
+        textSize = 14f
+        setTextColor(0xFF4E5969.toInt())
+        setPadding(dp(22), dp(9), dp(22), dp(9))
+        setRoundedBg(0xFFF2F3F5.toInt(), 9f)
+    }
+    val confirmBtn = TextView(this).apply {
+        text = confirmText
+        textSize = 14f
+        setTextColor(Color.WHITE)
+        setTypeface(null, Typeface.BOLD)
+        setPadding(dp(26), dp(9), dp(26), dp(9))
+        setRoundedBg(0xFF165DFF.toInt(), 9f)
+    }
+    val btnRow = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.END
+        addView(cancelBtn)
+        addView(confirmBtn, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { leftMargin = dp(10) })
+    }
+
+    val root = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(20), dp(16), dp(20), dp(16))
+        addView(header)
+        addView(contentScroll, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(10) })
+        addView(btnRow, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(14) })
+    }
+
+    val dialog = Dialog(this)
+    dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+    dialog.setContentView(root)
+    dialog.setCanceledOnTouchOutside(true)
+    dialog.window?.apply {
+        setBackgroundDrawable(GradientDrawable().apply {
+            setColor(Color.WHITE)
+            cornerRadius = dp(16).toFloat()
+        })
+        setLayout((resources.displayMetrics.widthPixels * 0.92).toInt(), WindowManager.LayoutParams.WRAP_CONTENT)
+    }
+    cancelBtn.setOnClickListener { dialog.dismiss() }
+    confirmBtn.setOnClickListener {
+        onConfirm()
+        dialog.dismiss()
+    }
+    return dialog
+}
+
 /** 全屏预览商品大图：黑色背景、点击任意位置关闭、长按保存到相册 */
 fun Context.showImagePreview(url: String?) {
     if (url.isNullOrBlank()) return

@@ -479,22 +479,12 @@ class StockScanFragment : Fragment() {
             result = "pending", extra = mapOf("count" to pkgs.size, "postingNumbers" to postingNumbers)
         )
 
-        val message = buildString {
-            append("该快递单关联 ${pkgs.size} 个待入库订单:\n")
-            for (pkg in pkgs) {
-                val qty = pkg.items?.sumOf { it.quantity ?: 0.0 }?.toLong() ?: 0
-                append("· ${pkg.postingNumber ?: pkg.id}")
-                if (!pkg.storeName.isNullOrBlank()) append(" (${pkg.storeName})")
-                append(" 共 $qty 件\n")
-            }
-            append("\n将向 Ozon 确认全部订单为一个货件(不拆分),是否全部入库?")
-        }
-
         var confirmed = false
-        val dialog = AlertDialog.Builder(requireContext())
-            .setTitle("批量入库确认")
-            .setMessage(message)
-            .setPositiveButton("全部入库") { _, _ ->
+        val dialog = requireContext().buildMultiPackageConfirmDialog(
+            pkgs = pkgs,
+            courierNo = code,
+            confirmText = "全部入库",
+            onConfirm = {
                 confirmed = true
                 reportLog(
                     "multi_package_confirm_confirm", "确认批量入库 ${pkgs.size} 个订单",
@@ -505,8 +495,7 @@ class StockScanFragment : Fragment() {
                     doShip(pkg.id, pkg.postingNumber, code, pkg.items?.firstOrNull()?.picUrl, pkg.storeId)
                 }
             }
-            .setNegativeButton("取消", null)
-            .create()
+        )
         dialog.setOnDismissListener {
             dialogShowing = false
             pendingCount = (pendingCount - 1).coerceAtLeast(0)
