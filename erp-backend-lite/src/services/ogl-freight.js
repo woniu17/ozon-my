@@ -110,8 +110,8 @@ export const OGL_SPLIT_OPERABLE_STATUSES = new Set([
  * @param {string}  [p.operateStatus]       本地流转状态(判定是否仍可拆包)
  * @param {number}  [p.maxUnits=20]         最大件数上限,超限不做(拆分枚举开销)
  * @returns {object}
- *   {applicable:false, reason}  非 OGL/缺数据/超费率范围,不展示
- *   {applicable:true, splitEligible:false, reason, whole, ...}  单件/多SKU等,只展示整件运费
+ *   {applicable:false, reason}  非 OGL/缺数据/超费率范围/单件订单,不展示
+ *   {applicable:true, splitEligible:false, reason, whole, ...}  多SKU/超限/无单价,只展示整件运费
  *   {applicable:true, splitEligible:true, saving, best, whole, saveCny, ...}  同SKU多件,给出拆包结论
  */
 export function analyzeOglSplit({
@@ -136,12 +136,13 @@ export function analyzeOglSplit({
 
   const wholeInfo = buildSplitWhole(whole, v, w);
 
-  // 不可拆:多 SKU / 单件 / 超限 / 无单价 → 只提供整件运费
+  // 不可拆:多 SKU / 超限 / 无单价 → 只提供整件运费;单件订单不展示提醒(2026-11)
   if (multiSku) {
     return { applicable: true, splitEligible: false, reason: 'multi_sku', operable: false, whole: wholeInfo };
   }
   if (!Number.isFinite(n) || n <= 1) {
-    return { applicable: true, splitEligible: false, reason: 'single_unit', operable: false, whole: wholeInfo };
+    // 单个商品数量的订单无需拆包/不拆包提醒
+    return { applicable: false, reason: 'single_unit' };
   }
   if (n > maxUnits) {
     return { applicable: true, splitEligible: false, reason: 'too_many_units', operable, whole: wholeInfo };
