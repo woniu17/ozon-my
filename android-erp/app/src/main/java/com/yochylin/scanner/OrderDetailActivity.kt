@@ -1656,6 +1656,44 @@ class OrderDetailActivity : ComponentActivity() {
         if (links.isNotEmpty() && p.operateStatus != "wait_process") {
             dActionBar.addView(actionButton("同步采购物流") { onSyncLogistics() })
         }
+
+        // 搁置/取消搁置(2026-11-08):搁置后订单不再参与流转,可在列表「已搁置」中查看并恢复
+        dActionBar.addView(actionButton(if (p.isIgnored) "取消搁置" else "搁置") { onIgnore(p) })
+    }
+
+    /** 搁置/取消搁置(2026-11-08):搁置时二次确认,取消搁置直接执行 */
+    private fun onIgnore(p: Pkg) {
+        val ignored = !p.isIgnored
+        val doIgnore = {
+            lifecycleScope.launch {
+                try {
+                    Api.post(
+                        "/admin/api/order-process/ignore",
+                        mapOf("packageId" to p.id, "ignored" to ignored)
+                    ).asJsonObject
+                    toast(if (ignored) "已搁置" else "已恢复")
+                    markChanged()
+                    loadDetail()
+                } catch (e: Exception) {
+                    if (e is ApiException && e.code == 401) {
+                        toast("登录已过期,请重新登录")
+                        goLogin()
+                    } else {
+                        toast(e.message ?: "操作失败")
+                    }
+                }
+            }
+        }
+        if (ignored) {
+            AlertDialog.Builder(this)
+                .setTitle("搁置订单")
+                .setMessage("搁置后该订单将不再参与入库/发运等流转，可在订单列表「已搁置」中查看并恢复。确定搁置吗？")
+                .setPositiveButton("确定搁置") { _, _ -> doIgnore() }
+                .setNegativeButton("取消", null)
+                .show()
+        } else {
+            doIgnore()
+        }
     }
 
     /** 详情页操作按钮：统一浅蓝底 + 主色文字风格 */
