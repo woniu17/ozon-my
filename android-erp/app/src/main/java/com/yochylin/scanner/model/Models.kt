@@ -88,8 +88,11 @@ data class Pkg(
 // OGL 拆包省钱分析(2026-11):后端 /order-process/list 与 /detail 返回,同 SKU 多件订单拆包运费对比
 data class SplitAnalysis(
     val applicable: Boolean = false,
+    val splitEligible: Boolean = false,   // 是否可拆(同 SKU 多件且在费率范围内)
     val operable: Boolean = false,
     val operateStatus: String? = null,
+    val saving: Boolean = false,          // 拆包是否更省(整件更省时为 false)
+    val reason: String? = null,           // 不可拆原因:multi_sku/too_many_units/no_unit_price/single_unit/...
     val whole: SplitWhole? = null,
     val best: SplitBest? = null,
     val saveCny: Double? = null,

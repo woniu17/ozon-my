@@ -421,7 +421,7 @@ class StockScanFragment : Fragment() {
         mainHandler.postDelayed(r, 2000)
     }
 
-    /** 多件商品:弹窗二次确认,展示商品明细;弹窗期间暂停连扫防叠加触发 */
+    /** 多件商品:弹窗二次确认,展示商品图片/明细 + OGL 拆单建议;弹窗期间暂停连扫防叠加触发 */
     private fun showMultiConfirm(pkg: Pkg, code: String, totalQty: Long, imageUrl: String? = null) {
         if (!isAdded) return
         pendingCount++
@@ -434,31 +434,15 @@ class StockScanFragment : Fragment() {
             result = "pending", extra = mapOf("totalQty" to totalQty)
         )
 
-        val itemsText = pkg.items
-            ?.joinToString("\n") { it ->
-                val name = it.title ?: it.offerId ?: it.sku ?: "商品"
-                "· $name ×${fmtQty(it.quantity ?: 0.0)}"
-            }
-            ?.takeIf { it.isNotBlank() }
-
-        val message = buildString {
-            append("货件 ${pkg.postingNumber}\n")
-            if (!pkg.storeName.isNullOrBlank()) append("店铺:${pkg.storeName}\n")
-            append("共 $totalQty 件商品")
-            if (itemsText != null) append(":\n$itemsText")
-            append("\n\n将向 Ozon 确认全部商品为一个货件(不拆分)。")
-        }
-
         var confirmed = false
-        val dialog = AlertDialog.Builder(requireContext())
-            .setTitle("入库确认")
-            .setMessage(message)
-            .setPositiveButton("确认入库") { _, _ ->
+        val dialog = requireContext().buildMultiItemConfirmDialog(
+            pkg = pkg,
+            confirmText = "确认入库",
+            onConfirm = {
                 confirmed = true
                 doShip(pkg.id, pkg.postingNumber, code, imageUrl, pkg.storeId)
             }
-            .setNegativeButton("取消", null)
-            .create()
+        )
         dialog.setOnDismissListener {
             dialogShowing = false
             pendingCount = (pendingCount - 1).coerceAtLeast(0)

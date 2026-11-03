@@ -269,12 +269,12 @@ class ScanShipFragment : Fragment() {
     private fun confirmAndShip(pkg: Pkg) {
         val totalQty = (pkg.items?.sumOf { it.quantity ?: 0.0 } ?: 0.0).toLong()
         if (totalQty > 1) {
-            AlertDialog.Builder(requireContext())
-                .setTitle("入库确认")
-                .setMessage("货件 ${pkg.postingNumber}\n共 $totalQty 件商品,将向 Ozon 确认全部商品为一个货件(不拆分)。")
-                .setPositiveButton("入库") { _, _ -> doShipPackage(pkg) }
-                .setNegativeButton("取消", null)
-                .show()
+            // 多件商品二次确认:商品图片/明细 + OGL 拆单建议(2026-11)
+            requireContext().buildMultiItemConfirmDialog(
+                pkg = pkg,
+                confirmText = "入库",
+                onConfirm = { doShipPackage(pkg) }
+            ).show()
         } else {
             doShipPackage(pkg)
         }
