@@ -1198,6 +1198,7 @@ class PurchaseActivity : ComponentActivity() {
             )
         }
         val tabRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        var activeTabView: TextView? = null
         for (t in platTabs) {
             val selected = t.key == activeTabKey
             val tv = TextView(this).apply {
@@ -1212,11 +1213,24 @@ class PurchaseActivity : ComponentActivity() {
                     ViewGroup.LayoutParams.WRAP_CONTENT
                 ).apply { rightMargin = dp(8) }
             }
+            if (selected) activeTabView = tv
             tv.setOnClickListener { switchPlatTab(t.key) }
             tabRow.addView(tv)
         }
         hScroll.addView(tabRow)
         purchaseContent.addView(hScroll)
+        // 当前平台 tab 保持在可见位置(2026-11-08):页面重建后选中 tab 可能被横向滚动栏遮挡,
+        // 布局完成后将选中 tab 自动滚动到可视区域内
+        hScroll.post {
+            val v = activeTabView ?: return@post
+            val left = v.left
+            val right = v.right
+            if (left < hScroll.scrollX) {
+                hScroll.smoothScrollTo((left - dp(4)).coerceAtLeast(0), 0)
+            } else if (right > hScroll.scrollX + hScroll.width) {
+                hScroll.smoothScrollTo((right - hScroll.width + dp(4)).coerceAtLeast(0), 0)
+            }
+        }
 
         // 登录态警示
         if (def != null && curPlatLogin() != "yes") {
