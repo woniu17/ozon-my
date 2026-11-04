@@ -97,6 +97,22 @@ class StockScanFragment : Fragment() {
     /** 国内快递单号格式预检:纯数字10-15位,或 1-3位字母前缀+9-15位数字(+0-2位字母后缀,如SF/JD/JT/EMS) */
     private val COURIER_NO_REGEX = Regex("^[0-9]{10,15}$|^[A-Za-z]{1,3}[0-9]{9,15}[A-Za-z]{0,2}$")
 
+    /** 已入库本地状态(2026-11-08):入库成功后本地推进到待打单及之后,重复扫描只在视频区提示"已入库" */
+    private val STOCKED_LOCAL_STATUSES = setOf(
+        "wait_stick", "wait_dispatch", "dispatching", "delivering", "signed"
+    )
+
+    /** 已入库/在途 Ozon 状态(2026-11-08):视频区提示"已入库",不重复入库 */
+    private val STOCKED_OZON_STATUSES = setOf(
+        "awaiting_registration", "awaiting_deliver",
+        "driver_pickup", "delivering", "delivered"
+    )
+
+    /** 可入库 Ozon 状态(2026-11-08):本地 wait_stock 时纳入入库流程(已入库态由后端幂等返回) */
+    private val SHIPPABLE_OZON_STATUSES = setOf(
+        "awaiting_packaging", "awaiting_registration", "awaiting_deliver"
+    )
+
     private var paused = true
     private var torchOn = false
     private var dialogShowing = false
@@ -339,66 +355,74 @@ class StockScanFragment : Fragment() {
                 // 2026-11-08:同一采购快递单号可关联多个待入库订单,收集全部待入库订单
                 // (而非只取第一个),多个时弹窗确认后一次性全部入库,避免漏入。
                 // 2026-11-03:awaiting_registration/awaiting_deliver 已在 Ozon 后台流转,后端幂等返回已入库并推进本地,同样纳入待入库扫描
-                val pendingPkgs = resp.packages.filter {
-                    it.ozonStatus in setOf("awaiting_packaging", "awaiting_registration", "awaiting_deliver") && it.id.isNotEmpty()
+                // 2026-11-08(用户反馈):已入库订单(本地已推进到待打单及之后)只在视频区提示"已入库",
+                // 不再报错、不增加记录;正在入库中的重复扫描用提示音提醒。
+                val hitPkgs = resp.packages.filter { it.id.isNotEmpty() }
+                // 待入库订单:本地 wait_stock(已采购待入库) + Ozon 可入库/已入库态(后端幂等)
+                val pendingPkgs = hitPkgs.filter {
+                    it.operateStatus == "wait_stock"
+                        && it.ozonStatus in SHIPPABLE_OZON_STATUSES
                 }
-                if (pendingPkgs.isEmpty()) {
-                    // 未命中待入库订单:只在视频区提示,不进记录列表
-                    if (resp.packages.isEmpty()) {
-                        showScanHint("❌ 未找到订单:$code", error = true)
-                        playFeedback(false)
-                        reportLog("scan_not_found", "未找到订单", code = code, result = "failed")
+                if (pendingPkgs.isNotEmpty()) {
+                    // 多个待入库订单(同一采购单拆成多单):弹窗列出全部,确认后批量入库
+                    if (pendingPkgs.size > 1) {
+                        showMultiPackageConfirm(pendingPkgs, code)
+                        return@launch
+                    }
+                    val stockPkg = pendingPkgs[0]
+                    val totalQty = (stockPkg.items?.sumOf { it.quantity ?: 0.0 } ?: 0.0).toLong()
+                    // 订单商品首图(入库记录展示,取第一个商品图片)
+                    val imageUrl = stockPkg.items?.firstOrNull()?.picUrl
+                    if (totalQty > 1) {
+                        showMultiConfirm(stockPkg, code, totalQty, imageUrl)
                     } else {
-                        // 找到订单但不在待入库状态:明确提示原因(而非笼统"无待入库订单")。
-                        // 例如已入库(Ozon awaiting_registration/awaiting_deliver 等)提示"已入库",
-                        // 其它状态提示具体状态,方便用户判断是否误扫/需人工处理。
-                        val hit = resp.packages.firstOrNull { it.id.isNotEmpty() }
-                        val status = hit?.ozonStatus.orEmpty()
-                        val pn = hit?.postingNumber ?: ""
-                        val shippedStates = setOf(
-                            "awaiting_registration", "awaiting_deliver",
-                            "driver_pickup", "delivering", "delivered"
-                        )
-                        if (status in shippedStates) {
-                            showScanHint("✅ 该订单已入库:${pn.ifBlank { code }}", error = false)
-                            playFeedback(true)
-                            reportLog(
-                                "scan_status_skipped", "该订单已入库,不重复入库",
-                                code = code, postingNumber = pn.ifBlank { null },
-                                storeId = hit?.storeId,
-                                result = "warning", extra = mapOf("status" to status)
-                            )
-                        } else {
-                            // 有订单但当前状态不可入库:识别成功(有单),播放成功音提示
-                            showScanHint(
-                                "⏭ 订单状态[${status.ifBlank { "未知" }}]不可入库:${pn.ifBlank { code }}",
-                                error = false
-                            )
-                            playFeedback(true)
-                            reportLog(
-                                "scan_status_skipped", "订单状态 ${status.ifBlank { "未知" }} 不可入库",
-                                code = code, postingNumber = pn.ifBlank { null },
-                                storeId = hit?.storeId,
-                                result = "warning", extra = mapOf("status" to status)
-                            )
-                        }
+                        doShip(stockPkg.id, stockPkg.postingNumber, code, imageUrl, stockPkg.storeId)
                     }
                     return@launch
                 }
-                // 多个待入库订单(同一采购单拆成多单):弹窗列出全部,确认后批量入库
-                if (pendingPkgs.size > 1) {
-                    showMultiPackageConfirm(pendingPkgs, code)
+                if (hitPkgs.isEmpty()) {
+                    // 未命中订单:只在视频区提示,不进记录列表
+                    showScanHint("❌ 未找到订单:$code", error = true)
+                    playFeedback(false)
+                    reportLog("scan_not_found", "未找到订单", code = code, result = "failed")
                     return@launch
                 }
-                val stockPkg = pendingPkgs[0]
-                val totalQty = (stockPkg.items?.sumOf { it.quantity ?: 0.0 } ?: 0.0).toLong()
-                // 订单商品首图(入库记录展示,取第一个商品图片)
-                val imageUrl = stockPkg.items?.firstOrNull()?.picUrl
-                if (totalQty > 1) {
-                    showMultiConfirm(stockPkg, code, totalQty, imageUrl)
-                } else {
-                    doShip(stockPkg.id, stockPkg.postingNumber, code, imageUrl, stockPkg.storeId)
+                // 已入库(本地已推进到待打单及之后,或 Ozon 已入库/在途):只在视频区提示,不重复入库、不写记录
+                val stocked = hitPkgs.firstOrNull {
+                    it.operateStatus in STOCKED_LOCAL_STATUSES || it.ozonStatus in STOCKED_OZON_STATUSES
                 }
+                if (stocked != null) {
+                    val pn = stocked.postingNumber ?: ""
+                    showScanHint("✅ 该订单已入库:${pn.ifBlank { code }}", error = false)
+                    playFeedback(true)
+                    reportLog(
+                        "scan_status_skipped", "该订单已入库,不重复入库",
+                        code = code, postingNumber = pn.ifBlank { null },
+                        storeId = stocked.storeId,
+                        result = "warning",
+                        extra = mapOf(
+                            "operateStatus" to (stocked.operateStatus ?: ""),
+                            "ozonStatus" to (stocked.ozonStatus ?: "")
+                        )
+                    )
+                    return@launch
+                }
+                // 有订单但当前状态不可入库:明确提示原因(而非笼统"无待入库订单")。
+                // 例如未采购(wait_process)提示提交采购信息,其它状态提示具体状态。
+                val hit = hitPkgs.first()
+                val status = hit.operateStatus ?: hit.ozonStatus.orEmpty()
+                val pn = hit.postingNumber ?: ""
+                showScanHint(
+                    "⏭ 订单状态[${status.ifBlank { "未知" }}]不可入库:${pn.ifBlank { code }}",
+                    error = false
+                )
+                playFeedback(true)
+                reportLog(
+                    "scan_status_skipped", "订单状态 ${status.ifBlank { "未知" }} 不可入库",
+                    code = code, postingNumber = pn.ifBlank { null },
+                    storeId = hit.storeId,
+                    result = "warning", extra = mapOf("status" to status)
+                )
             } catch (e: Exception) {
                 failCount++
                 addRecord(RecordEntry(RecordStatus.FAILED, code, message = "查询失败:${e.message ?: e.javaClass.simpleName}"))
@@ -516,6 +540,8 @@ class StockScanFragment : Fragment() {
         // 防重(2026-11):同一货件入库请求未返回时,忽略重复扫码/重复点击,避免叠加触发两次入库
         if (!submittingPackageIds.add(packageId)) {
             showScanHint("⏳ 该订单正在入库处理中:$postingNumber", error = false)
+            // 2026-11-08(用户反馈):正在入库中时增加声音提示,提醒用户订单在处理、勿重复操作
+            playProcessing()
             reportLog(
                 "ship_duplicate_ignored", "入库请求处理中,忽略重复提交",
                 code = code, packageId = packageId, postingNumber = postingNumber, storeId = storeId,
@@ -528,18 +554,11 @@ class StockScanFragment : Fragment() {
             try {
                 val r = Api.post("/admin/api/order-process/ship", mapOf("packageId" to packageId)).asJsonObject
                 if (r.optBoolean("alreadyShipped")) {
-                    // 该订单已入库过:若记录列表中最新一条就是本订单(刚入库成功又扫到),
-                    // 不再重复添加"已入库过"记录,仅视频区提示,避免连扫/弹窗后重复刷记录。
-                    val latest = records.firstOrNull()
-                    if (latest?.packageId == packageId) {
-                        showScanHint("✅ 已入库过:$postingNumber", error = false)
-                        playFeedback(true)
-                    } else {
-                        successCount++
-                        addRecord(RecordEntry(RecordStatus.SUCCESS, code, packageId, postingNumber, "已入库过", imageUrl))
-                        playFeedback(true)
-                        reportLog("ship_already", "该订单已入库过", code = code, packageId = packageId, postingNumber = postingNumber, storeId = storeId, result = "warning")
-                    }
+                    // 2026-11-08(用户反馈):已入库订单只在视频区提示"已入库过",不增加记录/计数,
+                    // 避免重复扫描刷记录列表。
+                    showScanHint("✅ 已入库过:$postingNumber", error = false)
+                    playFeedback(true)
+                    reportLog("ship_already", "该订单已入库过", code = code, packageId = packageId, postingNumber = postingNumber, storeId = storeId, result = "warning")
                 } else {
                     val title = if (r.optBoolean("pending")) "入库指令已提交" else "入库成功"
                     successCount++
@@ -678,6 +697,20 @@ class StockScanFragment : Fragment() {
             // 错误音:低频 NACK 长鸣
             playTone(ToneGenerator.TONE_PROP_NACK, 300)
         }
+    }
+
+    /** 处理中提示音(2026-11-08):单响中频 beep + 轻微震动,用于"订单正在入库处理中"的重复扫描提醒,
+ *  与成功双响 beep、失败 NACK 低频音区分开 */
+    private fun playProcessing() {
+        runCatching {
+            val vibrator = requireContext().getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            if (Build.VERSION.SDK_INT >= 26) {
+                vibrator.vibrate(VibrationEffect.createOneShot(30, VibrationEffect.DEFAULT_AMPLITUDE))
+            } else {
+                vibrator.vibrate(longArrayOf(0L, 30), -1)
+            }
+        }
+        playTone(ToneGenerator.TONE_PROP_BEEP2, 150)
     }
 
     private fun playTone(toneType: Int, durationMs: Int) {

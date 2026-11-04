@@ -1699,6 +1699,20 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
     }
     // 新流程(2026-11):必须采购后才可入库——仅 wait_stock(待入库)可操作
     if (row.operateStatus !== 'wait_stock') {
+      // 2026-11-08(安卓扫描入库反馈):本地已入库(入库成功已推进到待打单及之后)时幂等返回已入库,
+      // 避免重复扫描已入库订单报错、刷失败记录。wait_process(未采购)/cancelled 等仍按错误处理。
+      const stockedLocalStates = new Set(['wait_stick', 'wait_dispatch', 'dispatching', 'delivering', 'signed']);
+      if (stockedLocalStates.has(row.operateStatus)) {
+        logOrderAction({
+          packageId, postingNumber: row.postingNumber, storeId: row.storeId,
+          action: 'ship',
+          actionName: '入库',
+          result: 'success',
+          message: `本地已是 ${row.operateStatus},按已入库幂等处理`,
+          source: 'web',
+        });
+        return res.json(ok({ alreadyShipped: true, ozonStatus: 'awaiting_registration', localStatus: row.operateStatus }));
+      }
       logOrderAction({
         packageId, postingNumber: row.postingNumber, storeId: row.storeId,
         action: 'ship',
