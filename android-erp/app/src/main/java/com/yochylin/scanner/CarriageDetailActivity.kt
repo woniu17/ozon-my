@@ -146,11 +146,22 @@ class CarriageDetailActivity : ComponentActivity() {
 
     // ── 历史快照(只读) ──
     private fun renderHistory() {
-        val carriage = intent.getStringExtra(EXTRA_CARRIAGE_JSON)
-            ?.let { runCatching { JsonParser.parseString(it).asJsonObject }.getOrNull() }
-        val postingsJson = intent.getStringExtra(EXTRA_POSTINGS_JSON)
-        val contactJson = intent.getStringExtra(EXTRA_CONTACT_JSON)
-        renderHistoryData(carriage, postingsJson, contactJson)
+        // 2026-11-08:历史详情从 history/list 接口加载(后端已合并本地补记行),
+        // 不再依赖 Intent 的 postings_json 原始快照(不含 manual 补记行,且可能为空导致列表空白)。
+        content.removeAllViews()
+        content.addView(loadingView())
+        lifecycleScope.launch {
+            try {
+                loadHistoryDetailFromApi()
+            } catch (e: Exception) {
+                // 接口失败时退回 Intent 快照,保证基础信息可看
+                val carriage = intent.getStringExtra(EXTRA_CARRIAGE_JSON)
+                    ?.let { runCatching { JsonParser.parseString(it).asJsonObject }.getOrNull() }
+                val postingsJson = intent.getStringExtra(EXTRA_POSTINGS_JSON)
+                val contactJson = intent.getStringExtra(EXTRA_CONTACT_JSON)
+                renderHistoryData(carriage, postingsJson, contactJson)
+            }
+        }
     }
 
     // 2026-11-08:本地补记关联后刷新详情复用——从 Intent 快照或 history/list 数据渲染
@@ -1023,35 +1034,41 @@ class CarriageDetailActivity : ComponentActivity() {
     }
 
     // 补记/移除后重新拉取 history/list 单行并重渲染详情
+    // 从 history/list 接口加载合并后的完整历史详情(含本地补记行)
+    private suspend fun loadHistoryDetailFromApi() {
+        val data = Api.post(
+            "/admin/api/order-process/carriage/history/list",
+            mapOf("storeId" to storeId, "carriageId" to carriageId)
+        ).asJsonObject
+        val items = data.optJsonArray("items") ?: JsonArray()
+        val row = items.firstOrNull {
+            it.isJsonObject &&
+                it.asJsonObject.get("id")
+                    ?.takeIf { j -> j.isJsonPrimitive && j.asJsonPrimitive.isNumber }
+                    ?.asLong == carriageId
+        }?.asJsonObject
+        if (row == null) {
+            toast("未找到该发运单历史记录")
+            return
+        }
+        val postingsJson = row.optJsonArray("postings")?.toString()
+        val contactJson = row.optJsonArray("contact")?.toString()
+        val carriageJson = row.get("carriage")
+            ?.takeIf { it.isJsonObject }
+            ?.asJsonObject
+            ?.toString()
+        renderHistoryData(
+            carriageJson?.let { runCatching { JsonParser.parseString(it).asJsonObject }.getOrNull() },
+            postingsJson,
+            contactJson
+        )
+    }
+
+    // 补记/移除后刷新历史详情
     private fun refreshHistoryDetail() {
         lifecycleScope.launch {
             try {
-                val data = Api.post(
-                    "/admin/api/order-process/carriage/history/list",
-                    mapOf("storeId" to storeId, "carriageId" to carriageId)
-                ).asJsonObject
-                val items = data.optJsonArray("items") ?: JsonArray()
-                val row = items.firstOrNull {
-                    it.isJsonObject &&
-                        it.asJsonObject.get("id")
-                            ?.takeIf { j -> j.isJsonPrimitive && j.asJsonPrimitive.isNumber }
-                            ?.asLong == carriageId
-                }?.asJsonObject
-                if (row == null) {
-                    toast("未找到该发运单历史记录")
-                    return@launch
-                }
-                val postingsJson = row.optJsonArray("postings")?.toString()
-                val contactJson = row.optJsonArray("contact")?.toString()
-                val carriageJson = row.get("carriage")
-                    ?.takeIf { it.isJsonObject }
-                    ?.asJsonObject
-                    ?.toString()
-                renderHistoryData(
-                    carriageJson?.let { runCatching { JsonParser.parseString(it).asJsonObject }.getOrNull() },
-                    postingsJson,
-                    contactJson
-                )
+                loadHistoryDetailFromApi()
             } catch (e: Exception) {
                 handleError(e)
             }
