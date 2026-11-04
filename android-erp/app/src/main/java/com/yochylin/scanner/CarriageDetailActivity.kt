@@ -79,6 +79,11 @@ class CarriageDetailActivity : ComponentActivity() {
     private val postings = mutableListOf<JsonObject>()
     private val contactConfigs = mutableListOf<JsonObject>()
 
+    // 历史快照数据(2026-11-08:补记关联后刷新详情用)
+    private var historyPostings: JsonArray = JsonArray()
+    private var historyContact: JsonArray? = null
+    private var historyCarriage: JsonObject? = null
+
     // 联系方式表单
     private var phone = ""
     private var nick = ""
@@ -145,6 +150,18 @@ class CarriageDetailActivity : ComponentActivity() {
             ?.let { runCatching { JsonParser.parseString(it).asJsonObject }.getOrNull() }
         val postingsJson = intent.getStringExtra(EXTRA_POSTINGS_JSON)
         val contactJson = intent.getStringExtra(EXTRA_CONTACT_JSON)
+        renderHistoryData(carriage, postingsJson, contactJson)
+    }
+
+    // 2026-11-08:本地补记关联后刷新详情复用——从 Intent 快照或 history/list 数据渲染
+    private fun renderHistoryData(carriage: JsonObject?, postingsJson: String?, contactJson: String?) {
+        content.removeAllViews()
+        historyCarriage = carriage
+        historyContact = contactJson
+            ?.let { runCatching { JsonParser.parseString(it).asJsonArray }.getOrNull() }
+        historyPostings = postingsJson
+            ?.let { runCatching { JsonParser.parseString(it).asJsonArray }.getOrNull() }
+            ?: JsonArray()
 
         if (carriage != null) {
             status = carriage.optString("status").ifBlank { status }
@@ -154,18 +171,13 @@ class CarriageDetailActivity : ComponentActivity() {
             integrationType = carriage.optString("integration_type").ifBlank { integrationType }
             statusTag.text = statusLabel(status)
         }
+        postingsCount = "${historyPostings.size()}"
         renderInfoCard()
-
-        val contactArray = contactJson
-            ?.let { runCatching { JsonParser.parseString(it).asJsonArray }.getOrNull() }
-        renderContactCard(contactArray)
-
-        val postingArray = postingsJson
-            ?.let { runCatching { JsonParser.parseString(it).asJsonArray }.getOrNull() }
-        renderPostings(postingArray, editable = false)
+        renderContactCard(historyContact)
+        renderPostings(historyPostings, editable = false, historyMode = true)
 
         val hint = TextView(this).apply {
-            text = "该发运已完成,以下为本地保存的快照信息。"
+            text = "该发运已完成,以下为本地保存的快照信息。补记的订单仅本地关联,不推送 Ozon。"
             textSize = 12f
             setTextColor(Color.parseColor("#86909c"))
             gravity = Gravity.CENTER
@@ -480,7 +492,7 @@ class CarriageDetailActivity : ComponentActivity() {
     }
 
     // ── 货件列表 ──
-    private fun renderPostings(historyPostings: JsonArray?, editable: Boolean) {
+    private fun renderPostings(historyPostings: JsonArray?, editable: Boolean, historyMode: Boolean = false) {
         val section = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
@@ -508,6 +520,17 @@ class CarriageDetailActivity : ComponentActivity() {
                     setOnClickListener { openCandidateDialog() }
                 }
             )
+        } else if (historyMode) {
+            header.addView(
+                TextView(this).apply {
+                    text = "＋ 添加漏掉的订单"
+                    setTextColor(Color.parseColor("#165dff"))
+                    textSize = 13f
+                    setTypeface(typeface, android.graphics.Typeface.BOLD)
+                    setPadding(dp(8f), dp(2f), dp(4f), dp(2f))
+                    setOnClickListener { openHistoryCandidateDialog() }
+                }
+            )
         }
         section.addView(header)
 
@@ -527,14 +550,14 @@ class CarriageDetailActivity : ComponentActivity() {
             )
         } else {
             for ((i, p) in items.withIndex()) {
-                list.addView(buildPostingCard(p, editable, i))
+                list.addView(buildPostingCard(p, editable, i, historyMode))
             }
         }
         section.addView(list, matchWrap().apply { topMargin = dp(8f) })
         content.addView(section, matchWrap().apply { topMargin = dp(16f) })
     }
 
-    private fun buildPostingCard(p: JsonObject, editable: Boolean, index: Int): View {
+    private fun buildPostingCard(p: JsonObject, editable: Boolean, index: Int, historyMode: Boolean = false): View {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -615,6 +638,17 @@ class CarriageDetailActivity : ComponentActivity() {
                     textSize = 12f
                     setPadding(dp(8f), dp(4f), dp(4f), dp(4f))
                     setOnClickListener { removePosting(p) }
+                }
+            )
+        } else if (historyMode && p.optString("source") == "manual") {
+            // 2026-11-08:本地补记行可移除关联
+            card.addView(
+                TextView(this).apply {
+                    text = "移除补记"
+                    setTextColor(Color.parseColor("#f53f3f"))
+                    textSize = 12f
+                    setPadding(dp(8f), dp(4f), dp(4f), dp(4f))
+                    setOnClickListener { removeManualPosting(p) }
                 }
             )
         }
@@ -813,6 +847,245 @@ class CarriageDetailActivity : ComponentActivity() {
                 handleError(e)
             }
         }
+    }
+
+    // ── 已完成发运单:添加漏掉的订单(本地补记关联,2026-11-08) ──
+    private fun openHistoryCandidateDialog() {
+        lifecycleScope.launch {
+            val existing = historyPostings.map { it.asJsonObject.optString("posting_number") }.toSet()
+            val checked = mutableMapOf<String, Boolean>()
+            val box = LinearLayout(this@CarriageDetailActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(12f), dp(4f), dp(12f), dp(4f))
+            }
+            try {
+                // 全部店铺 id(本店+跨店;后端 mixed-candidates 会过滤无同步凭据的跨店)
+                val storeIds = runCatching {
+                    Api.get("/admin/api/order-stats/stores").asJsonObject
+                        .optJsonArray("stores")
+                        ?.mapNotNull { it.asJsonObject.optString("id").takeIf { id -> id.isNotBlank() } }
+                        ?: emptyList()
+                }.getOrDefault(emptyList())
+                val data = Api.post(
+                    "/admin/api/order-process/carriage/mixed-candidates",
+                    mapOf(
+                        "storeId" to storeId,
+                        "carriageId" to carriageId,
+                        "sourceStoreIds" to storeIds,
+                        "includeSelf" to true
+                    )
+                ).asJsonObject
+                val arr = data.optJsonArray("postings") ?: JsonArray()
+                val candidates = arr.filter {
+                    it.isJsonObject && !existing.contains(it.asJsonObject.optString("posting_number"))
+                }
+                if (candidates.isEmpty()) {
+                    toast("没有可补记的待发运货件")
+                    return@launch
+                }
+                val scroll = ScrollView(this@CarriageDetailActivity)
+                scroll.addView(box, android.widget.FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ))
+                // 候选列表:勾选 + 序号 + 商品图 + 货件号 + 店铺 + 商品摘要 + 状态
+                var index = 0
+                for (p in candidates) {
+                    val po = p.asJsonObject
+                    val number = po.optString("posting_number")
+                    val cb = CheckBox(this@CarriageDetailActivity).apply {
+                        textSize = 13f
+                    }
+                    val row = LinearLayout(this@CarriageDetailActivity).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        setPadding(dp(8f), dp(8f), dp(8f), dp(8f))
+                        setRoundedBg(0xFFF7F8FA.toInt(), 8f)
+                    }
+                    val rowLp = matchWrap()
+                    rowLp.bottomMargin = dp(8f)
+                    row.layoutParams = rowLp
+
+                    row.addView(cb)
+                    row.addView(
+                        TextView(this@CarriageDetailActivity).apply {
+                            text = "${index + 1}"
+                            setTextColor(Color.parseColor("#86909c"))
+                            textSize = 11f
+                            gravity = Gravity.CENTER
+                            setRoundedBg(0xFFE5E6EB.toInt(), 999f)
+                            setPadding(dp(5f), dp(1f), dp(5f), dp(1f))
+                        }
+                    )
+                    val img = ImageView(this@CarriageDetailActivity).apply {
+                        layoutParams = LinearLayout.LayoutParams(dp(48f), dp(48f)).apply {
+                            marginStart = dp(8f)
+                        }
+                        scaleType = ImageView.ScaleType.CENTER_CROP
+                        setRoundedBg(0xFFE5E6EB.toInt(), 6f)
+                    }
+                    val firstProduct = po.optJsonArray("products")
+                        ?.firstOrNull { it.isJsonObject }?.asJsonObject
+                    val imageUrl = firstProduct?.optString("image_url").orEmpty()
+                    if (imageUrl.isNotBlank()) {
+                        val absolute = if (imageUrl.startsWith("/")) Api.BASE_URL + imageUrl else imageUrl
+                        img.load(absolute)
+                    }
+                    row.addView(img)
+
+                    val mid = LinearLayout(this@CarriageDetailActivity).apply {
+                        orientation = LinearLayout.VERTICAL
+                    }
+                    mid.addView(
+                        TextView(this@CarriageDetailActivity).apply {
+                            text = number.ifBlank { "—" }
+                            setTextColor(Color.parseColor("#1d2129"))
+                            textSize = 12f
+                            typeface = android.graphics.Typeface.MONOSPACE
+                            setTypeface(typeface, android.graphics.Typeface.BOLD)
+                        }
+                    )
+                    mid.addView(
+                        TextView(this@CarriageDetailActivity).apply {
+                            text = "店铺:${po.optString("store_name").ifBlank { po.optString("store_id") }}"
+                            setTextColor(Color.parseColor("#4e5969"))
+                            textSize = 11f
+                        },
+                        matchWrap().apply { topMargin = dp(2f) }
+                    )
+                    mid.addView(
+                        TextView(this@CarriageDetailActivity).apply {
+                            text = productsSummary(po)
+                            setTextColor(Color.parseColor("#4e5969"))
+                            textSize = 11f
+                            setMaxLines(2)
+                        },
+                        matchWrap().apply { topMargin = dp(2f) }
+                    )
+                    mid.addView(
+                        TextView(this@CarriageDetailActivity).apply {
+                            text = "状态:${po.optString("status").ifBlank { "—" }}"
+                            setTextColor(Color.parseColor("#86909c"))
+                            textSize = 10f
+                        },
+                        matchWrap().apply { topMargin = dp(2f) }
+                    )
+                    row.addView(mid, LinearLayout.LayoutParams(
+                        0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+                    ).apply { marginStart = dp(8f) })
+
+                    row.setOnClickListener { cb.isChecked = !cb.isChecked }
+                    cb.setOnCheckedChangeListener { _, isChecked -> checked[number] = isChecked }
+                    box.addView(row)
+                    index++
+                }
+                AlertDialog.Builder(this@CarriageDetailActivity)
+                    .setTitle("选择要补记的货件")
+                    .setView(scroll)
+                    .setPositiveButton("补记选中") { _, _ ->
+                        val selected = checked.filterValues { it }.keys
+                        if (selected.isEmpty()) {
+                            toast("请先勾选要补记的货件")
+                            return@setPositiveButton
+                        }
+                        val items = candidates
+                            .filter { it.asJsonObject.optString("posting_number") in selected }
+                            .map {
+                                mapOf(
+                                    "storeId" to it.asJsonObject.optString("store_id"),
+                                    "postingNumber" to it.asJsonObject.optString("posting_number")
+                                )
+                            }
+                        doAddManualPostings(items)
+                    }
+                    .setNegativeButton("取消", null)
+                    .show()
+            } catch (e: Exception) {
+                handleError(e)
+            }
+        }
+    }
+
+    private fun doAddManualPostings(items: List<Map<String, String>>) {
+        lifecycleScope.launch {
+            try {
+                val r = Api.post(
+                    "/admin/api/order-process/carriage/mixed/add",
+                    mapOf("storeId" to storeId, "carriageId" to carriageId, "items" to items)
+                ).asJsonObject
+                val addedCount = r.optJsonArray("added")?.size() ?: 0
+                toast(if (addedCount > 0) "已补记 $addedCount 个货件" else "所选货件均已关联,无需重复添加")
+                refreshHistoryDetail()
+            } catch (e: Exception) {
+                handleError(e)
+            }
+        }
+    }
+
+    // 补记/移除后重新拉取 history/list 单行并重渲染详情
+    private fun refreshHistoryDetail() {
+        lifecycleScope.launch {
+            try {
+                val data = Api.post(
+                    "/admin/api/order-process/carriage/history/list",
+                    mapOf("storeId" to storeId, "carriageId" to carriageId)
+                ).asJsonObject
+                val items = data.optJsonArray("items") ?: JsonArray()
+                val row = items.firstOrNull {
+                    it.isJsonObject &&
+                        it.asJsonObject.get("id")
+                            ?.takeIf { j -> j.isJsonPrimitive && j.asJsonPrimitive.isNumber }
+                            ?.asLong == carriageId
+                }?.asJsonObject
+                if (row == null) {
+                    toast("未找到该发运单历史记录")
+                    return@launch
+                }
+                val postingsJson = row.optJsonArray("postings")?.toString()
+                val contactJson = row.optJsonArray("contact")?.toString()
+                val carriageJson = row.get("carriage")
+                    ?.takeIf { it.isJsonObject }
+                    ?.asJsonObject
+                    ?.toString()
+                renderHistoryData(
+                    carriageJson?.let { runCatching { JsonParser.parseString(it).asJsonObject }.getOrNull() },
+                    postingsJson,
+                    contactJson
+                )
+            } catch (e: Exception) {
+                handleError(e)
+            }
+        }
+    }
+
+    // 移除本地补记关联(只动 manual 行)
+    private fun removeManualPosting(p: JsonObject) {
+        val number = p.optString("posting_number")
+        val pStoreId = p.optString("store_id")
+        AlertDialog.Builder(this)
+            .setTitle("移除补记关联")
+            .setMessage("确认移除货件 $number 的补记关联?\n该操作仅删除本地关联,不影响 Ozon 已发运记录。")
+            .setPositiveButton("移除") { _, _ ->
+                lifecycleScope.launch {
+                    try {
+                        Api.post(
+                            "/admin/api/order-process/carriage/mixed/remove",
+                            mapOf(
+                                "storeId" to storeId,
+                                "carriageId" to carriageId,
+                                "postingStoreId" to pStoreId,
+                                "postingNumber" to number
+                            )
+                        )
+                        toast("已移除补记关联")
+                        refreshHistoryDetail()
+                    } catch (e: Exception) {
+                        handleError(e)
+                    }
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
 
     // ── 确认/取消发运 ──

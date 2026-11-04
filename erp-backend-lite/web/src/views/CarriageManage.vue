@@ -193,11 +193,13 @@ const defaultContactConfig = computed(
 const editPostings = reactive({ dirty: false, saving: false });
 
 // 可加入货件候选弹窗(2026-11-02:本店/跨店分页 + 打单时间筛选)
+// 2026-11-08:已完成发运单进入 history 模式(本地补记,本店+跨店)。
 const candidate = reactive({
   open: false,
   loading: false,
-  tab: 'self',            // self=本店货件 / cross=跨店货件
-  sourceStoreIds: [],     // 跨店:候选店铺 id 多选(默认全选)
+  saving: false,
+  tab: 'self',            // self=本店货件 / cross=跨店货件 / history=已完成发运单本地补记
+  sourceStoreIds: [],     // 候选店铺 id 多选(默认全选)
   printedRange: 'all',    // 打单时间快捷筛选:all/today/yesterday
   printedFrom: '',        // 自定义起始日期 YYYY-MM-DD(至今,优先于快捷筛选)
   keyword: '',
@@ -212,11 +214,19 @@ const PRINTED_RANGES = [
   { key: 'yesterday', label: '昨天' },
 ];
 const crossStores = computed(() => storesStore.list.filter((s) => String(s.id) !== String(storeId.value)));
+// 候选店铺列表:补记模式含本店
+const candidateStores = computed(() => {
+  if (detail.fromHistory) {
+    const self = storesStore.list.find((s) => String(s.id) === String(storeId.value));
+    return [self, ...crossStores.value].filter(Boolean);
+  }
+  return crossStores.value;
+});
 const allStoresSelected = computed(
-  () => crossStores.value.length > 0 && crossStores.value.every((s) => candidate.sourceStoreIds.includes(s.id))
+  () => candidateStores.value.length > 0 && candidateStores.value.every((s) => candidate.sourceStoreIds.includes(s.id))
 );
 function toggleAllStores() {
-  candidate.sourceStoreIds = allStoresSelected.value ? [] : crossStores.value.map((s) => s.id);
+  candidate.sourceStoreIds = allStoresSelected.value ? [] : candidateStores.value.map((s) => s.id);
 }
 
 // 待发运货件弹窗(2026-11-02:点击占位行"货件数"查看该配送方式下待发运货件)
@@ -938,16 +948,23 @@ function shortProductName(name, len = 15) {
 const postingsEditable = computed(() => detail.carriage?.status === 'new');
 
 // 打开候选货件弹窗(2026-11-02:默认本店货件 tab)
+// 2026-11-08:已完成发运单进入本地补记模式(本店+跨店候选,纯本地关联)
 async function onOpenCandidate() {
   candidate.open = true;
-  candidate.tab = 'self';
   candidate.selected = {};
-  candidate.sourceStoreIds = [];
   candidate.printedRange = 'all';
   candidate.printedFrom = '';
   candidate.keyword = '';
   candidate.postings = [];
-  await loadSelfCandidates();
+  if (detail.fromHistory) {
+    candidate.tab = 'history';
+    candidate.sourceStoreIds = candidateStores.value.map((s) => s.id);
+    await loadHistoryCandidates();
+  } else {
+    candidate.tab = 'self';
+    candidate.sourceStoreIds = [];
+    await loadSelfCandidates();
+  }
 }
 
 // 本店货件候选(Ozon available-postings)
@@ -1034,6 +1051,34 @@ async function loadCrossCandidates() {
   }
 }
 
+// 已完成发运单本地补记候选(2026-11-08):本店+跨店,走 mixed-candidates includeSelf
+async function loadHistoryCandidates() {
+  if (!candidate.sourceStoreIds.length) {
+    show('请先选择店铺', 'warning');
+    return;
+  }
+  candidate.loading = true;
+  try {
+    const params = {
+      carriageId: detail.carriageId,
+      sourceStoreIds: candidate.sourceStoreIds,
+      includeSelf: true,
+    };
+    const range = computePrintedRange(candidate.printedRange, candidate.printedFrom);
+    if (range.from) params.printedFrom = range.from;
+    if (range.to) params.printedTo = range.to;
+    if (candidate.keyword.trim()) params.keyword = candidate.keyword.trim();
+    const data = await getMixedCarriageCandidates(storeId.value, params);
+    candidate.postings = data?.postings || [];
+    candidate.selected = {};
+    if (!candidate.postings.length) show('没有符合筛选条件的待发运货件', 'info');
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  } finally {
+    candidate.loading = false;
+  }
+}
+
 // 候选列表全选/反选(2026-11-06)
 function selectAllCandidates() {
   for (const p of candidate.postings) candidate.selected[p.posting_number] = true;
@@ -1044,10 +1089,28 @@ function invertCandidates() {
 const selectedCount = computed(() => candidate.postings.filter((p) => candidate.selected[p.posting_number]).length);
 
 // 确认加入候选货件
-function onConfirmAddCandidates() {
+async function onConfirmAddCandidates() {
   const selected = candidate.postings.filter((p) => candidate.selected[p.posting_number]);
   if (!selected.length) {
     show('请先勾选要加入的货件', 'warning');
+    return;
+  }
+  // 已完成发运单:本地补记关联(纯本地写入,不推送 Ozon)
+  if (detail.fromHistory) {
+    candidate.saving = true;
+    try {
+      const items = selected.map((p) => ({ storeId: p.store_id, postingNumber: p.posting_number }));
+      const r = await addMixedCarriagePostings(storeId.value, detail.carriageId, items);
+      const addedCount = r?.addedCount ?? 0;
+      candidate.open = false;
+      if (addedCount) show(`已补记 ${addedCount} 个货件`, 'success');
+      else show('所选货件均已关联,无需重复添加', 'info');
+      await refreshHistoryDetail();
+    } catch (err) {
+      show(err.message || String(err), 'error');
+    } finally {
+      candidate.saving = false;
+    }
     return;
   }
   const existing = new Set(detail.postings.map((p) => p.posting_number));
@@ -1061,6 +1124,28 @@ function onConfirmAddCandidates() {
   editPostings.dirty = true;
   candidate.open = false;
   show(`已加入 ${added.length} 个货件`, 'success');
+}
+
+// 已完成发运单补记后刷新历史列表并重开详情(展示本地新增 manual 行)
+async function refreshHistoryDetail() {
+  await loadHistory();
+  const row = history.list.find((r) => Number(r.id) === Number(detail.carriageId));
+  if (row) await openDetail(row);
+}
+
+// 移除已完成发运单的本地补记关联(2026-11-08)
+async function onRemoveHistoryPosting(p) {
+  if (!(await confirmStore.ask({
+    message: `确认移除货件 ${p.posting_number} 的补记关联?`,
+    danger: true,
+  }))) return;
+  try {
+    await removeMixedCarriagePosting(storeId.value, detail.carriageId, p.store_id, p.posting_number);
+    show('已移除补记关联', 'success');
+    await refreshHistoryDetail();
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  }
 }
 
 // 从发运移除货件(前端临时,保存时全量提交)
@@ -1538,6 +1623,7 @@ defineExpose({ refreshCurrent, listLoading });
               {{ editPostings.saving ? '保存中…' : '保存货件' }}
             </button>
             <button v-if="postingsEditable" class="btn btn-ghost btn-sm" @click="onOpenCandidate">添加货件</button>
+            <button v-if="detail.fromHistory" class="btn btn-ghost btn-sm" @click="onOpenCandidate">添加漏掉的订单</button>
             <button
               v-if="!detail.fromHistory"
               class="btn btn-ghost btn-sm"
@@ -1612,6 +1698,9 @@ defineExpose({ refreshCurrent, listLoading });
                 </td>
                 <td v-if="postingsEditable" class="ops">
                   <button class="btn btn-danger btn-sm" @click="onRemovePosting(p)">移除</button>
+                </td>
+                <td v-else-if="detail.fromHistory && p.source === 'manual'" class="ops">
+                  <button class="btn btn-danger btn-sm" @click="onRemoveHistoryPosting(p)">移除补记</button>
                 </td>
               </tr>
             </tbody>
@@ -1923,26 +2012,29 @@ defineExpose({ refreshCurrent, listLoading });
 
     <!-- 可加入货件候选弹窗(2026-11-02:本店/跨店分页 + 打单时间筛选) -->
     <AppModal :open="candidate.open" title="添加货件" size="lg" @update:open="candidate.open = $event">
-      <div class="candidate-tabs">
+      <div v-if="!detail.fromHistory" class="candidate-tabs">
         <button class="candidate-tab" :class="{ on: candidate.tab === 'self' }" @click="switchCandidateTab('self')">本店货件</button>
         <button class="candidate-tab" :class="{ on: candidate.tab === 'cross' }" @click="switchCandidateTab('cross')">跨店货件</button>
       </div>
+      <div v-if="detail.fromHistory" class="candidate-history-hint">
+        已完成发运单补记:从本店/跨店待发运订单中选择漏掉的货件,仅本地关联(不推送 Ozon)。
+      </div>
 
-      <!-- 跨店筛选栏(2026-11-06:店铺全选/多选 + 打单时间快捷 + 起始日至今 + 关键字) -->
-      <div v-if="candidate.tab === 'cross'" class="candidate-filter">
+      <!-- 跨店/补记筛选栏(2026-11-06:店铺全选/多选 + 打单时间快捷 + 起始日至今 + 关键字) -->
+      <div v-if="candidate.tab === 'cross' || candidate.tab === 'history'" class="candidate-filter">
         <div class="filter-row">
           <label class="filter-check filter-check-all">
             <input type="checkbox" :checked="allStoresSelected" @change="toggleAllStores" />
             全选
           </label>
-          <label v-for="s in crossStores" :key="s.id" class="filter-check">
+          <label v-for="s in candidateStores" :key="s.id" class="filter-check">
             <input type="checkbox" :value="s.id" v-model="candidate.sourceStoreIds" />
-            {{ s.name || s.id }}
+            {{ s.name || s.id }}{{ String(s.id) === String(storeId) ? '(本店)' : '' }}
           </label>
         </div>
         <div class="filter-row">
-          <input v-model="candidate.keyword" class="form-control filter-keyword" placeholder="货件号搜索" @keyup.enter="loadCrossCandidates" />
-          <button class="btn btn-primary btn-sm" :disabled="candidate.loading" @click="loadCrossCandidates">搜索</button>
+          <input v-model="candidate.keyword" class="form-control filter-keyword" placeholder="货件号搜索" @keyup.enter="candidate.tab === 'history' ? loadHistoryCandidates() : loadCrossCandidates()" />
+          <button class="btn btn-primary btn-sm" :disabled="candidate.loading" @click="candidate.tab === 'history' ? loadHistoryCandidates() : loadCrossCandidates()">搜索</button>
         </div>
         <div class="filter-chips">
           <button
@@ -1965,15 +2057,19 @@ defineExpose({ refreshCurrent, listLoading });
           已准备发运、不在当前发运中的本店货件(共 {{ candidate.postings.length }} 个),勾选后加入
         </span>
         <span v-else class="field-hint">
-          已选 {{ candidate.sourceStoreIds.length }}/{{ crossStores.length }} 家店铺的待发运货件(共 {{ candidate.postings.length }} 个),已排除当前发运中货件
+          已选 {{ candidate.sourceStoreIds.length }}/{{ candidateStores.length }} 家店铺的待发运货件(共 {{ candidate.postings.length }} 个),已排除当前发运中货件
         </span>
         <div class="spacer"></div>
         <span class="field-hint">已选 {{ selectedCount }} 个</span>
         <button class="btn btn-ghost btn-sm" :disabled="candidate.loading || !candidate.postings.length" @click="selectAllCandidates">全选</button>
         <button class="btn btn-ghost btn-sm" :disabled="candidate.loading || !candidate.postings.length" @click="invertCandidates">反选</button>
-        <button class="btn btn-ghost btn-sm" :disabled="candidate.loading" @click="candidate.tab === 'self' ? loadSelfCandidates() : loadCrossCandidates()">刷新</button>
-        <button class="btn btn-primary btn-sm" :disabled="candidate.loading" @click="onConfirmAddCandidates">
-          加入选中
+        <button
+          class="btn btn-ghost btn-sm"
+          :disabled="candidate.loading"
+          @click="candidate.tab === 'self' ? loadSelfCandidates() : (candidate.tab === 'history' ? loadHistoryCandidates() : loadCrossCandidates())"
+        >刷新</button>
+        <button class="btn btn-primary btn-sm" :disabled="candidate.loading || candidate.saving" @click="onConfirmAddCandidates">
+          {{ candidate.saving ? '保存中…' : (detail.fromHistory ? '补记选中' : '加入选中') }}
         </button>
       </div>
       <div v-if="candidate.loading && !candidate.postings.length" class="list-empty">加载中…</div>
@@ -1983,7 +2079,7 @@ defineExpose({ refreshCurrent, listLoading });
           <tr>
             <th class="candidate-check"></th>
             <th>货件号</th>
-            <th v-if="candidate.tab === 'cross'">店铺 / 打单时间</th>
+            <th v-if="candidate.tab === 'cross' || candidate.tab === 'history'">店铺 / 打单时间</th>
             <th>商品</th>
             <th class="num">件数</th>
           </tr>
@@ -1994,8 +2090,8 @@ defineExpose({ refreshCurrent, listLoading });
               <input v-model="candidate.selected[p.posting_number]" type="checkbox" />
             </td>
             <td class="mono">{{ p.posting_number }}</td>
-            <td v-if="candidate.tab === 'cross'">
-              <div class="candidate-store">{{ p.store_name || p.store_id }}·跨店</div>
+            <td v-if="candidate.tab === 'cross' || candidate.tab === 'history'">
+              <div class="candidate-store">{{ p.store_name || p.store_id }}{{ String(p.store_id) === String(storeId) ? '(本店)' : '·跨店' }}</div>
               <div class="candidate-time">打单 {{ fmtPrinted(p.printed_at || p.waybill_printed_at) }}</div>
             </td>
             <td>

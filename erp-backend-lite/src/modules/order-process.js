@@ -2474,6 +2474,8 @@ router.post('/admin/api/order-process/carriage/list', async (req, res) => {
 router.post('/admin/api/order-process/carriage/history/list', async (req, res) => {
   try {
     requireCarriageStore(req); // 仅鉴权;历史为本地全量
+    // 2026-11-08:支持按 carriageId 过滤单个历史发运单(安卓端补记后刷新详情用)
+    const carriageId = req.body?.carriageId ? Number(req.body.carriageId) : null;
     const rows = db
       .prepare(
         `SELECT store_id, carriage_id AS id, status, delivery_method_id, delivery_method_name,
@@ -2481,11 +2483,12 @@ router.post('/admin/api/order-process/carriage/history/list', async (req, res) =
                 postings_count, containers_count, carriage_json, postings_json, contact_json,
                 tracking_number, last_seen_at, archived_at, updated_at
          FROM op_carriage_history
-         WHERE status IN ('received', 'delivered', 'cancelled', 'closed') OR archived_at IS NOT NULL
+         WHERE (status IN ('received', 'delivered', 'cancelled', 'closed') OR archived_at IS NOT NULL)
+           AND (? IS NULL OR carriage_id = ?)
          ORDER BY updated_at DESC
          LIMIT 2000`
       )
-      .all();
+      .all(carriageId, carriageId);
     const stores = config.loadStores() || [];
     const items = rows.map((r) => {
       let postings = [];
@@ -2539,6 +2542,56 @@ router.post('/admin/api/order-process/carriage/history/list', async (req, res) =
     for (const it of items) {
       const n = cntMap.get(Number(it.id)) || 0;
       if (n > 0) it.postings_count = Math.max(n, Number(it.postings_count) || 0);
+    }
+    // 2026-11-08:合并本地补记关联行(已完成发运单添加漏掉订单,source='manual',纯本地记录)。
+    // 批量读一次全部活跃 manual 行按发运单分组,避免逐单查询。
+    const manualRows = db
+      .prepare(
+        `SELECT cp.carriage_id AS carriageId,
+                cp.store_id AS storeId,
+                cp.posting_number AS postingNumber,
+                cp.ozon_order_id AS ozonOrderId,
+                cp.package_id AS packageId,
+                cp.added_at AS addedAt,
+                cp.status AS status
+         FROM op_carriage_posting cp
+         WHERE cp.source = 'manual' AND cp.removed_at IS NULL`
+      )
+      .all();
+    const manualByCarriage = new Map();
+    for (const r of manualRows) {
+      const cid = Number(r.carriageId);
+      if (!manualByCarriage.has(cid)) manualByCarriage.set(cid, []);
+      manualByCarriage.get(cid).push(r);
+    }
+    const storesMap = new Map((config.loadStores() || []).map((s) => [String(s.id), s]));
+    for (const it of items) {
+      const manual = manualByCarriage.get(Number(it.id)) || [];
+      if (!manual.length) continue;
+      const existingKeys = new Set((it.postings || []).map((p) => `${p?.store_id}|${p?.posting_number}`));
+      const objs = manual
+        .filter((m) => !existingKeys.has(`${m.storeId}|${m.postingNumber}`))
+        .map((m) => ({
+          posting_number: m.postingNumber,
+          store_id: m.storeId,
+          store_name: storesMap.get(String(m.storeId))?.name || '',
+          source: 'manual',
+          added_at: m.addedAt,
+          ozon_order_id: m.ozonOrderId,
+          package_id: m.packageId,
+          status: m.status,
+          products: [],
+        }));
+      if (objs.length) {
+        hydrateLocalPostings(objs);
+        it.postings = [...(it.postings || []), ...objs];
+        it.postings_count = Math.max(Number(it.postings_count) || 0, it.postings.length);
+        attachCrossStoreShippedForPostings(it.postings, {
+          currentStoreId: it.store_id,
+          currentCarriageStatus: it.status,
+          excludeCarriageId: Number(it.id),
+        });
+      }
     }
     res.json(ok({ items }));
   } catch (e) { carriageHandleError(e, req, res, '获取发运历史'); }
@@ -2781,23 +2834,36 @@ router.post('/admin/api/order-process/carriage/available-postings', async (req, 
 // Ozon 发运 API 只认本店货件;跨店货件仅本地关联(source='manual'),不推送 Ozon。
 // 候选数据源为本地库(待发运包裹),支持按打单时间 COALESCE(waybill_printed_at, dispatched_at) 筛选。
 
-// 跨店待发运候选(2026-11-06:sourceStoreIds 支持多选,兼容单选 sourceStoreId)
+// 待发运候选(2026-11-06:sourceStoreIds 支持多选,兼容单选 sourceStoreId)
+// 2026-11-08:includeSelf=true 时纳入发运单归属店铺(本店),用于"已完成发运单补记漏掉订单"。
 router.post('/admin/api/order-process/carriage/mixed-candidates', async (req, res) => {
   try {
     const store = requireCarriageStore(req); // 发运单归属店铺
     const carriageId = req.body?.carriageId;
     if (!carriageId) throw new ApiError(ErrorCode.VALIDATION_ERROR, 'carriageId 必填');
-    // 多选(Web 端)优先,单选(小程序端)兜底
-    const rawIds = Array.isArray(req.body?.sourceStoreIds) && req.body.sourceStoreIds.length
+    const includeSelf = !!req.body?.includeSelf;
+    // 多选(Web 端)优先,单选(小程序端)兜底;includeSelf 且未指定店铺时默认 本店+全部已配置店铺
+    let rawIds = Array.isArray(req.body?.sourceStoreIds) && req.body.sourceStoreIds.length
       ? req.body.sourceStoreIds.map((x) => String(x))
       : (req.body?.sourceStoreId ? [String(req.body.sourceStoreId)] : []);
-    if (!rawIds.length) throw new ApiError(ErrorCode.VALIDATION_ERROR, '请至少选择一个跨店店铺');
-    // 排除归属店铺,只保留已配置 sync_credentials 的店铺
-    const srcStores = (config.loadStores() || []).filter(
-      (s) => rawIds.includes(String(s.id)) && String(s.id) !== String(store.id) && s?.sync_credentials?.clientId
-    );
+    const allStores = config.loadStores() || [];
+    if (!rawIds.length && includeSelf) {
+      rawIds = [
+        String(store.id),
+        ...allStores
+          .filter((s) => String(s.id) !== String(store.id) && s?.sync_credentials?.clientId)
+          .map((s) => String(s.id)),
+      ];
+    }
+    if (!rawIds.length) throw new ApiError(ErrorCode.VALIDATION_ERROR, '请至少选择一个店铺');
+    // 本店仅 includeSelf 时纳入;其它店铺要求已配置 sync_credentials
+    const srcStores = allStores.filter((s) => {
+      if (!rawIds.includes(String(s.id))) return false;
+      if (String(s.id) === String(store.id)) return includeSelf;
+      return !!s?.sync_credentials?.clientId;
+    });
     if (!srcStores.length) {
-      throw new ApiError(ErrorCode.VALIDATION_ERROR, '所选店铺不可用(需为其它店铺且已配置同步凭据)');
+      throw new ApiError(ErrorCode.VALIDATION_ERROR, '所选店铺不可用(需为本店补记或已配置同步凭据的店铺)');
     }
     const printedFrom = req.body?.printedFrom || null;
     const printedTo = req.body?.printedTo || null;
@@ -2908,6 +2974,24 @@ router.post('/admin/api/order-process/carriage/mixed/add', async (req, res) => {
       attachCrossStoreShippedForPostings(addedPostings, { currentStoreId: store.id });
       for (let i = 0; i < added.length; i++) {
         added[i].crossStoreShipped = addedPostings[i]?.cross_store_shipped || null;
+      }
+      // 2026-11-08:补记关联的货件同步 待发运 → 交运中(与确认发运一致,修正漏记订单状态)
+      try {
+        const postingNumbers = added.map((it) => it.postingNumber).filter(Boolean);
+        if (postingNumbers.length) {
+          const now = new Date().toISOString();
+          db.prepare(
+            `UPDATE op_package
+                SET operate_status = CASE WHEN operate_status = 'wait_dispatch' THEN 'dispatching' ELSE operate_status END,
+                    dispatched_at = CASE WHEN operate_status = 'wait_dispatch' THEN ? ELSE dispatched_at END,
+                    gmt_modified = ?
+              WHERE ozon_order_id IN (
+                SELECT id FROM op_ozon_order WHERE posting_number IN (${postingNumbers.map(() => '?').join(',')})
+              )`
+          ).run(now, now, ...postingNumbers);
+        }
+      } catch (e) {
+        logger.warn({ err: e?.message, carriageId: Number(carriageId) }, '[order-process] 补记关联后推进货件状态失败');
       }
     }
     res.json(ok({ added, skipped, addedCount: added.length, skippedCount: skipped.length }));

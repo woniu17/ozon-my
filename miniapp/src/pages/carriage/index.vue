@@ -220,6 +220,7 @@
                 {{ editPostings.saving ? '保存中…' : '保存货件' }}
               </view>
               <view v-if="postingsEditable" class="btn ghost sm" @click="onOpenCandidate">添加货件</view>
+              <view v-if="detail.fromHistory" class="btn ghost sm" @click="onOpenCandidate">添加漏掉的订单</view>
             </view>
             <view v-if="detail.postingsLoading && !detail.postings.length" class="empty small">加载中…</view>
             <view v-else-if="!detail.postings.length" class="empty small">该发运暂无货件</view>
@@ -246,6 +247,7 @@
                 <view class="posting-ops">
                   <text class="printed-tag" :class="p.can_print_label ? 'yes' : 'no'">{{ p.can_print_label ? '可打印' : '不可' }}</text>
                   <text v-if="postingsEditable" class="remove" @click="onRemovePosting(p)">移除</text>
+                  <text v-else-if="detail.fromHistory && p.source === 'manual'" class="remove" @click="onRemoveHistoryPosting(p)">移除补记</text>
                 </view>
               </view>
             </view>
@@ -366,15 +368,18 @@
       </view>
     </view>
 
-    <!-- 添加货件候选弹窗(2026-11-02:本店/跨店分页 + 打单时间筛选) -->
+    <!-- 添加货件候选弹窗(2026-11-02:本店/跨店分页 + 打单时间筛选;2026-11-08:已完成发运单补记模式) -->
     <view v-if="candidate.open" class="mask" @click="candidate.open = false">
       <view class="sheet candidate-sheet" @click.stop>
-        <view class="sheet-title">添加货件</view>
+        <view class="sheet-title">{{ detail.fromHistory ? '添加漏掉的订单' : '添加货件' }}</view>
 
-        <!-- 本店 / 跨店 切换 -->
-        <view class="candidate-tabs">
+        <!-- 本店 / 跨店 切换(补记模式隐藏) -->
+        <view v-if="!detail.fromHistory" class="candidate-tabs">
           <view class="candidate-tab" :class="{ on: candidate.tab === 'self' }" @click="switchCandidateTab('self')">本店货件</view>
           <view class="candidate-tab" :class="{ on: candidate.tab === 'cross' }" @click="switchCandidateTab('cross')">跨店货件</view>
+        </view>
+        <view v-if="detail.fromHistory" class="sheet-sub">
+          <text>已完成发运单补记:本店/跨店待发运订单,仅本地关联(不推送 Ozon)</text>
         </view>
 
         <view v-if="candidate.tab === 'self'" class="sheet-sub">
@@ -383,7 +388,7 @@
         </view>
 
         <!-- 跨店筛选栏 -->
-        <view v-else class="candidate-filter">
+        <view v-else-if="candidate.tab === 'cross'" class="candidate-filter">
           <picker :range="crossStoreNames" range-key="label" @change="onSelectCrossStore">
             <view class="filter-field">{{ crossStoreName || '选择店铺' }}</view>
           </picker>
@@ -415,6 +420,36 @@
           </view>
         </view>
 
+        <!-- 补记筛选栏(仅关键字 + 打单时间) -->
+        <view v-else-if="candidate.tab === 'history'" class="candidate-filter">
+          <view class="filter-chips">
+            <view
+              v-for="r in PRINTED_RANGES"
+              :key="r.key"
+              class="chip"
+              :class="{ on: candidate.printedRange === r.key }"
+              @click="setPrintedRange(r.key)"
+            >{{ r.label }}</view>
+          </view>
+          <view class="filter-dates">
+            <picker mode="date" :value="candidate.printedFrom" @change="candidate.printedFrom = $event.detail.value">
+              <view class="date-field">{{ candidate.printedFrom || '开始日期' }}</view>
+            </picker>
+            <text class="date-sep">~</text>
+            <picker mode="date" :value="candidate.printedTo" @change="candidate.printedTo = $event.detail.value">
+              <view class="date-field">{{ candidate.printedTo || '结束日期' }}</view>
+            </picker>
+          </view>
+          <view class="filter-row">
+            <input v-model="candidate.keyword" class="filter-input" placeholder="货件号搜索" confirm-type="search" @confirm="loadHistoryCandidates" />
+            <view class="btn primary sm" :class="{ disabled: candidate.loading }" @click="loadHistoryCandidates">搜索</view>
+          </view>
+          <view class="sheet-sub">
+            <text v-if="candidate.loading">加载中…</text>
+            <text v-else>全部店铺待发运货件(共 {{ candidate.postings.length }} 个),已排除当前发运中货件</text>
+          </view>
+        </view>
+
         <scroll-view scroll-y class="candidate-scroll">
           <view v-if="candidate.loading && !candidate.postings.length" class="empty small">加载中…</view>
           <view v-else-if="!candidate.postings.length" class="empty small">{{ candidate.tab === 'self' ? '没有可加入的「已准备发运」货件' : '没有符合筛选条件的待发运货件' }}</view>
@@ -425,8 +460,8 @@
               </view>
               <view class="posting-main">
                 <view class="posting-number mono">{{ p.posting_number }}</view>
-                <view v-if="candidate.tab === 'cross'" class="posting-store">{{ p.store_name || p.store_id }}·跨店</view>
-                <view v-if="candidate.tab === 'cross' && (p.printed_at || p.waybill_printed_at)" class="posting-time">
+                <view v-if="candidate.tab === 'cross' || candidate.tab === 'history'" class="posting-store">{{ p.store_name || p.store_id }}{{ String(p.store_id) === String(detail.storeId) ? '(本店)' : '·跨店' }}</view>
+                <view v-if="(candidate.tab === 'cross' || candidate.tab === 'history') && (p.printed_at || p.waybill_printed_at)" class="posting-time">
                   打单 {{ fmtPrinted(p.printed_at || p.waybill_printed_at) }}
                 </view>
                 <view class="posting-products">
@@ -443,7 +478,7 @@
         </scroll-view>
         <view class="sheet-actions">
           <view class="btn ghost" @click="candidate.open = false">取消</view>
-          <view class="btn primary" :class="{ disabled: candidate.loading }" @click="onConfirmAddCandidates">加入选中</view>
+          <view class="btn primary" :class="{ disabled: candidate.loading || candidate.saving }" @click="onConfirmAddCandidates">{{ candidate.saving ? '保存中…' : (detail.fromHistory ? '补记选中' : '加入选中') }}</view>
         </view>
       </view>
     </view>
@@ -701,10 +736,12 @@ const postingsModal = reactive({
 });
 
 // 可加入货件候选(2026-11-02:本店/跨店分页 + 打单时间筛选)
+// 2026-11-08:已完成发运单进入 history 模式(本地补记,本店+跨店)。
 const candidate = reactive({
   open: false,
   loading: false,
-  tab: 'self',            // self=本店货件 / cross=跨店货件
+  saving: false,
+  tab: 'self',            // self=本店货件 / cross=跨店货件 / history=已完成发运单本地补记
   sourceStoreId: '',      // 跨店:候选店铺 id
   printedRange: 'all',    // 打单时间快捷筛选:all/today/yesterday/3d/7d
   printedFrom: '',        // 自定义开始日期 YYYY-MM-DD
@@ -1285,15 +1322,21 @@ async function onSetAsDefault() {
 // ── 货件增加/删除(set-postings 全量覆盖) ────────────────
 async function onOpenCandidate() {
   candidate.open = true;
-  candidate.tab = 'self';
   candidate.selected = {};
-  candidate.sourceStoreId = '';
   candidate.printedRange = 'all';
   candidate.printedFrom = '';
   candidate.printedTo = '';
   candidate.keyword = '';
   candidate.postings = [];
-  await loadSelfCandidates();
+  if (detail.fromHistory) {
+    // 已完成发运单:本地补记模式(本店+跨店全部待发运订单)
+    candidate.tab = 'history';
+    await loadHistoryCandidates();
+  } else {
+    candidate.tab = 'self';
+    candidate.sourceStoreId = '';
+    await loadSelfCandidates();
+  }
 }
 
 // 本店货件候选(Ozon available-postings)
@@ -1393,14 +1436,59 @@ async function loadCrossCandidates() {
   }
 }
 
+// 已完成发运单本地补记候选(2026-11-08):本店+跨店全部店铺,走 mixed-candidates includeSelf
+async function loadHistoryCandidates() {
+  candidate.loading = true;
+  try {
+    const allStoreIds = stores.value
+      .filter((s) => s?.sync_credentials?.clientId || String(s.id) === String(detail.storeId))
+      .map((s) => String(s.id));
+    const params = {
+      carriageId: detail.carriageId,
+      sourceStoreIds: allStoreIds,
+      includeSelf: true,
+    };
+    const range = computePrintedRange(candidate.printedRange, candidate.printedFrom, candidate.printedTo);
+    if (range.from) params.printedFrom = range.from;
+    if (range.to) params.printedTo = range.to;
+    if (candidate.keyword.trim()) params.keyword = candidate.keyword.trim();
+    const data = await getMixedCarriageCandidates(detail.storeId, params);
+    candidate.postings = data?.postings || [];
+    candidate.selected = {};
+    if (!candidate.postings.length) toast('没有符合筛选条件的待发运货件');
+  } catch (err) {
+    toast(err.message || '获取补记候选失败');
+  } finally {
+    candidate.loading = false;
+  }
+}
+
 function toggleCandidate(postingNumber) {
   candidate.selected[postingNumber] = !candidate.selected[postingNumber];
 }
 
-function onConfirmAddCandidates() {
+async function onConfirmAddCandidates() {
   const selected = candidate.postings.filter((p) => candidate.selected[p.posting_number]);
   if (!selected.length) {
     toast('请先勾选要加入的货件');
+    return;
+  }
+  // 已完成发运单:本地补记关联(纯本地写入,不推送 Ozon)
+  if (detail.fromHistory) {
+    candidate.saving = true;
+    try {
+      const items = selected.map((p) => ({ storeId: p.store_id, postingNumber: p.posting_number }));
+      const r = await addMixedCarriagePostings(detail.storeId, detail.carriageId, items);
+      const addedCount = r?.addedCount ?? 0;
+      candidate.open = false;
+      if (addedCount) toast(`已补记 ${addedCount} 个货件`, 'success');
+      else toast('所选货件均已关联,无需重复添加');
+      await refreshHistoryDetail();
+    } catch (err) {
+      toast(err.message || '补记失败');
+    } finally {
+      candidate.saving = false;
+    }
     return;
   }
   const existing = new Set(detail.postings.map((p) => p.posting_number));
@@ -1414,6 +1502,31 @@ function onConfirmAddCandidates() {
   editPostings.dirty = true;
   candidate.open = false;
   toast(`已加入 ${added.length} 个货件`, 'success');
+}
+
+// 已完成发运单补记后刷新历史列表并重开详情(展示本地新增 manual 行)
+async function refreshHistoryDetail() {
+  await loadHistory();
+  const row = historyRows.value.find((r) => Number(r.id) === Number(detail.carriageId));
+  if (row) await openDetail(row);
+}
+
+// 移除已完成发运单的本地补记关联(2026-11-08)
+function onRemoveHistoryPosting(p) {
+  uni.showModal({
+    title: '移除补记关联',
+    content: `确认移除货件 ${p.posting_number} 的补记关联?`,
+    success: async (res) => {
+      if (!res.confirm) return;
+      try {
+        await removeMixedCarriagePosting(detail.storeId, detail.carriageId, p.store_id, p.posting_number);
+        toast('已移除补记关联', 'success');
+        await refreshHistoryDetail();
+      } catch (err) {
+        toast(err.message || '移除失败');
+      }
+    },
+  });
 }
 
 function onRemovePosting(p) {
