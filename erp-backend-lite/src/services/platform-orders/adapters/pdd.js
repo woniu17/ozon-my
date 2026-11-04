@@ -17,6 +17,9 @@ const PDD_API = 'https://mobile.yangkeduo.com/proxy/api/api/aristotle/order_list
 const PDD_SEARCH_API = 'https://mobile.yangkeduo.com/proxy/api/api/aristotle/order_list_search_v4';
 const PDD_ENTRY = 'https://mobile.yangkeduo.com/';
 const PDD_ORIGIN = 'https://mobile.yangkeduo.com';
+// 2026-11-08:一单多包裹支持——订单详情接口(取 shipping.id) + 拆包接口(取全部快递单号)
+const PDD_ORDER_API = 'https://mobile.yangkeduo.com/proxy/api/order/';
+const PDD_SPLIT_PACK_API = 'https://mobile.yangkeduo.com/proxy/api/api/express/split/pack';
 // 个人中心页路径(同源 fetch 用相对路径,自动带 cookie+referer;不导航避免触发反爬标记)
 const PDD_PERSONAL_PATH = '/personal.html';
 
@@ -223,17 +226,19 @@ function normalizeSearchOrder(o) {
 }
 
 /** 页面上下文 fetch(单参数对象;credentials include 自动带登录 cookie + referer)
- *  25s AbortController 超时:防风控挂起烧 60s 任务超时(同 page-fetch.js) */
-async function fetchInPage(page, url, body) {
+ *  25s AbortController 超时:防风控挂起烧 60s 任务超时(同 page-fetch.js)
+ *  2026-11-08:method 参数支持 GET(拼多多订单详情/拆包接口用) */
+async function fetchInPage(page, url, body, method = 'POST') {
   const r = await page.evaluate(async (arg) => {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), arg.timeoutMs);
     try {
+      const isGet = arg.method === 'GET';
       const resp = await fetch(arg.url, {
-        method: 'POST',
+        method: arg.method,
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(arg.body),
+        headers: isGet ? {} : { 'Content-Type': 'application/json' },
+        body: isGet ? undefined : JSON.stringify(arg.body),
         signal: ctrl.signal,
       });
       let json = null;
@@ -244,7 +249,7 @@ async function fetchInPage(page, url, body) {
     } finally {
       clearTimeout(timer);
     }
-  }, { url, body, timeoutMs: 25 * 1000 });
+  }, { url, body, method, timeoutMs: 25 * 1000 });
   if (r && r.networkError) {
     if (r.aborted) {
       throw new ApiError('BROWSER_ERROR', '拼多多页面请求 25s 无响应(疑似风控挂起),请运行 ERP 的 persistent 登录并人工过验证后重试', { status: 502 });
@@ -428,5 +433,57 @@ async function getPddTrace(orderSn, trackingNumber, account) {
   });
 }
 
-export { listPddOrders, searchPddOrder, getPddTrace, fetchPddOrderDetail, fetchPddOrderPromotions };
+/** 拼多多一单多包裹快递单号(2026-11-08)
+ *  背景:拼多多一个订单可拆成多个快递包裹(express/split/pack),列表/搜索接口只带主单号
+ *  tracking_number,导致 ERP 只存 1 个快递单号。本函数在登录页面上下文内:
+ *   1) 调订单详情接口 proxy/api/order/{orderSn} 取 shipping.id / shipping_name / 主单号
+ *   2) 调拆包接口 express/split/pack 取全部包裹 [{company, trackingNo}]
+ *  任一步失败(接口鉴权/风控)则降级为单个主单号,不阻塞物流轮询。
+ *  返回 [{ company, trackingNo }] */
+async function fetchPddOrderPackages(orderSn, trackingNumber, account) {
+  if (!orderSn) return [];
+  return withPage(account, 'pdd', PDD_ENTRY, PDD_ORIGIN, async (page) => {
+    const pdduid = await getPdduid(page);
+    let mainNo = trackingNumber || '';
+    let shippingId = '';
+    let shippingName = '';
+    // 1) 订单详情:取 shipping.id / shipping_name / 主单号
+    try {
+      const url = `${PDD_ORDER_API}${encodeURIComponent(orderSn)}?pdduid=${encodeURIComponent(pdduid)}`;
+      const r = await fetchInPage(page, url, {}, 'GET');
+      const detail = mapResponse(r, 'PDD_ORDER');
+      if (detail) {
+        mainNo = detail.tracking_number || mainNo;
+        shippingName = (detail.shipping && detail.shipping.shipping_name) || '';
+        if (!shippingName && detail.express_info) shippingName = detail.express_info.shipping_name || '';
+        if (detail.shipping && detail.shipping.id != null) shippingId = String(detail.shipping.id);
+      }
+    } catch {
+      // 详情接口失败:有主单号时仍尝试拆包,拆包也失败则降级单主单号
+    }
+    // 2) 拆包接口:取全部包裹
+    const packs = [];
+    if (shippingId && mainNo) {
+      try {
+        const url = `${PDD_SPLIT_PACK_API}?pdduid=${encodeURIComponent(pdduid)}&order_sn=${encodeURIComponent(orderSn)}&shipping_id=${encodeURIComponent(shippingId)}&tracking_number=${encodeURIComponent(mainNo)}`;
+        const r = await fetchInPage(page, url, {}, 'GET');
+        const data = mapResponse(r, 'PDD_SPLIT');
+        const list = (data && data.result && Array.isArray(data.result.list)) ? data.result.list : [];
+        for (const c of list) {
+          if (c && c.tracking_number) {
+            packs.push({ company: c.shipping_name || '', trackingNo: String(c.tracking_number) });
+          }
+        }
+      } catch {
+        // 拆包接口失败:降级单主单号
+      }
+    }
+    if (!packs.length && mainNo) {
+      packs.push({ company: shippingName, trackingNo: mainNo });
+    }
+    return packs;
+  });
+}
+
+export { listPddOrders, searchPddOrder, getPddTrace, fetchPddOrderDetail, fetchPddOrderPromotions, fetchPddOrderPackages };
 

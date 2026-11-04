@@ -25,7 +25,7 @@
 import { db } from '../db/index.js';
 import config from '../config/index.js';
 import { getLogisticsForOrder, getTraceForOrder, hasAliOpenApiToken } from './platform-orders/adapters/ali1688-openapi.js';
-import { getPddTrace, searchPddOrder } from './platform-orders/adapters/pdd.js';
+import { getPddTrace, searchPddOrder, fetchPddOrderPackages } from './platform-orders/adapters/pdd.js';
 import { getTaobaoTrace } from './platform-orders/adapters/taobao.js';
 import { getXianyuTrace } from './platform-orders/adapters/xianyu.js';
 import logger from '../middleware/log.js';
@@ -287,6 +287,14 @@ async function phaseFetchPddTrace() {
     if (!account) { skippedNoAccount++; continue; }
     try {
       const { steps, shippingName, trackingNumber } = await getPddTrace(r.purchase_sn, r.logistics_no, account);
+      // 一单多包裹(2026-11-08):详情+拆包接口取全部快递单号写入 packages_json;
+      // 用最新 trackingNumber 作为主单号(单号变更时以新单号查询)
+      try {
+        const packs = await fetchPddOrderPackages(r.purchase_sn, trackingNumber || r.logistics_no, account);
+        if (packs.length) writePackagesJson(r.id, packs);
+      } catch (pErr) {
+        logger.warn({ purchaseSn: r.purchase_sn, err: pErr.message }, '[purchase-logistics-poller] 阶段C:多包裹单号拉取失败');
+      }
       // 单号核对(2026-09-23):页面按 order_sn 返回订单当前物流,SSR 自带最新单号;
       // 与库里不一致(卖家换快递/单号录错)时覆盖,本轮轨迹即新单号的轨迹
       if (trackingNumber && trackingNumber !== r.logistics_no) {
@@ -678,6 +686,19 @@ function writeFilledLogisticsNo(id, logisticsNo, logisticsCompany) {
   ).run(logisticsNo, logisticsCompany || null, new Date().toISOString(), id);
 }
 
+/** 一单多包裹快递单号落库(2026-11-08,拼多多拆包发货)
+ *  packages_json 存全量包裹 [{company, trackingNo}],logistics_no 保留主单号(兼容旧逻辑);
+ *  仅内容变化时写入,避免无谓的 gmt_modified 更新 */
+function writePackagesJson(id, packages) {
+  if (!Array.isArray(packages) || !packages.length) return;
+  const row = db.prepare(`SELECT packages_json FROM op_purchase_order WHERE id = ?`).get(id);
+  const current = row && row.packages_json ? JSON.parse(row.packages_json) : null;
+  const nextJson = JSON.stringify(packages);
+  if (current && JSON.stringify(current) === nextJson) return;
+  db.prepare(`UPDATE op_purchase_order SET packages_json = ?, gmt_modified = ? WHERE id = ?`)
+    .run(nextJson, new Date().toISOString(), id);
+}
+
 /** 单号变更覆盖(2026-09-23,拉轨迹时按订单号核对出平台最新单号)
  *  场景:卖家换快递/单号录错;公司仅在非空时覆盖(空则保旧值)。
  *  2026-10-28:单号变更说明卖家已发货,顺带 wait_send/wait_pay → shipped */
@@ -773,6 +794,13 @@ async function syncPurchaseLogisticsForPackage(packageId) {
           results.push({ purchaseSn: o.purchaseSn, platform: o.platform, action: 'fill', detail: '暂无物流单号(可能未发货)' });
         } else {
           const { steps, shippingName, trackingNumber } = await getPddTrace(o.purchaseSn, o.logisticsNo, account);
+          // 一单多包裹(2026-11-08):详情+拆包接口取全部快递单号写入 packages_json
+          try {
+            const packs = await fetchPddOrderPackages(o.purchaseSn, trackingNumber || o.logisticsNo, account);
+            if (packs.length) writePackagesJson(o.id, packs);
+          } catch (pErr) {
+            logger.warn({ purchaseSn: o.purchaseSn, err: pErr.message }, '[purchase-logistics-poller] 手动同步:多包裹单号拉取失败');
+          }
           // 单号核对(2026-09-23):SSR 返回订单当前最新单号,不一致时覆盖(卖家换快递/单号录错)
           let changedNo = '';
           if (trackingNumber && trackingNumber !== o.logisticsNo) {

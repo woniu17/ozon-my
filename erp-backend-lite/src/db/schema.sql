@@ -754,6 +754,7 @@ CREATE TABLE IF NOT EXISTS op_purchase_order (
   auto_sync_amount  INTEGER DEFAULT 1,
   logistics_company TEXT,
   logistics_no      TEXT,
+  packages_json     TEXT,                       -- 一单多包裹全部快递单号([{company, trackingNo}],2026-11-08)
   last_trace_at     TEXT,
   last_trace_desc   TEXT,
   trace_json        TEXT,                       -- 完整物流轨迹节点(1688买家版API/妙手,[{acceptTime,remark}] 最新在前)

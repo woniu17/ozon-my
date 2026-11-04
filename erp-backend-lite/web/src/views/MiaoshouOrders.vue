@@ -720,7 +720,13 @@ onUnmounted(() => {
               </td>
               <td>
                 <div>{{ po.logistics_company || '—' }}</div>
-                <div class="sub muted mono">{{ po.logistics_no || '' }}</div>
+                <!-- 一单多包裹全量单号(2026-11-08);无 packages 时回退单主单号 -->
+                <div v-if="po.packages && po.packages.length > 1" class="sub muted mono">
+                  <template v-for="(p, pi) in po.packages" :key="pi">
+                    {{ p.trackingNo }}<span v-if="pi < po.packages.length - 1"> / </span>
+                  </template>
+                </div>
+                <div v-else class="sub muted mono">{{ po.logistics_no || '' }}</div>
                 <div v-if="po.last_trace" class="sub muted" :title="po.last_trace">{{ po.last_trace }}</div>
               </td>
             </tr>

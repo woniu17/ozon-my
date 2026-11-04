@@ -1169,6 +1169,8 @@ function onPrinterChange() {
                     >采购金额:{{ fmtMoney(l.allocatedAmount) }}</div>
                     <div class="purchase-line sub muted">
                       物流:{{ l.poLogisticsNo ? `${l.poLogisticsCompany || ''} ${l.poLogisticsNo}`.trim() : '—' }}
+                      <span v-if="l.poPackages && l.poPackages.length > 1" class="pkg-count"
+                        :title="'该采购单拆分为 ' + l.poPackages.length + ' 个快递包裹'">等{{ l.poPackages.length }}个</span>
                       <button
                         v-if="l.poLogisticsNo"
                         class="copy-btn"
@@ -1177,6 +1179,13 @@ function onPrinterChange() {
                       >
                         <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5" /><path d="M3.5 10.5h-1a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v1" /></svg>
                       </button>
+                    </div>
+                    <!-- 一单多包裹全量单号(2026-11-08) -->
+                    <div v-if="l.poPackages && l.poPackages.length > 1" class="purchase-line sub muted">
+                      包裹:
+                      <template v-for="(p, pi) in l.poPackages" :key="pi">
+                        {{ p.trackingNo }}<span v-if="pi < l.poPackages.length - 1"> · </span>
+                      </template>
                     </div>
                   </div>
                 </div>
@@ -2003,6 +2012,17 @@ function onPrinterChange() {
   gap: 8px;
   font-size: 13px;
   flex-wrap: wrap;
+}
+/* 一单多包裹数徽标(2026-11-08) */
+.pkg-count {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #4338ca;
+  font-size: 10px;
+  line-height: 16px;
+  cursor: default;
 }
 
 /* 操作条 */

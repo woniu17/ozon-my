@@ -221,6 +221,14 @@ async function ensureMigrations() {
     db.exec(`ALTER TABLE op_carriage_history ADD COLUMN tracking_number TEXT`);
     console.log('[db] migration: added column op_carriage_history.tracking_number');
   }
+  // 2026-11-08: op_purchase_order.packages_json 补列
+  // 拼多多一单多包裹(拆包发货)时保存全部快递单号 [{company, trackingNo}];
+  // logistics_no 保留主单号(扫描入库/物流查询兼容),packages_json 存全量用于展示
+  const _poPackagesPre = db.prepare(`PRAGMA table_info(op_purchase_order)`).all();
+  if (_poPackagesPre.length > 0 && !_poPackagesPre.some((c) => c.name === 'packages_json')) {
+    db.exec(`ALTER TABLE op_purchase_order ADD COLUMN packages_json TEXT`);
+    console.log('[db] migration: added column op_purchase_order.packages_json');
+  }
   // listing_templates 内置默认模板(is_builtin=1,不可删不可改)
   const builtinCount = db.prepare(`SELECT COUNT(*) as n FROM listing_templates WHERE is_builtin = 1`).get().n;
   if (builtinCount === 0) {

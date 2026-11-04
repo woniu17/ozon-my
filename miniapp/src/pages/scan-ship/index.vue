@@ -98,7 +98,15 @@
           <view class="purchase-line muted">采购金额:{{ fmtMoney(l.allocatedAmount) }}</view>
           <view class="purchase-line muted">
             物流:{{ logisticsLabel(l) }}
+            <text v-if="l.poPackages && l.poPackages.length > 1" class="pkg-count">等{{ l.poPackages.length }}个</text>
             <text v-if="l.poLogisticsNo" class="copy-link" @click.stop="copyText(l.poLogisticsNo, '快递单号')">复制</text>
+          </view>
+          <!-- 一单多包裹全量快递单号(2026-11-08) -->
+          <view v-if="l.poPackages && l.poPackages.length > 1" class="purchase-line muted">
+            包裹:
+            <template v-for="(p, pi) in l.poPackages" :key="pi">
+              <text>{{ p.trackingNo }}</text><text v-if="pi < l.poPackages.length - 1"> · </text>
+            </template>
           </view>
         </view>
 
@@ -1475,6 +1483,15 @@ onPullDownRefresh(async () => {
   font-size: 21rpx;
   color: #4e5969;
   padding: 2rpx 0;
+}
+/* 一单多包裹数徽标(2026-11-08) */
+.pkg-count {
+  font-size: 18rpx;
+  color: #165dff;
+  background: #eef4ff;
+  border-radius: 999rpx;
+  padding: 0 10rpx;
+  margin-left: 6rpx;
 }
 .purchase-line.muted {
   color: #86909c;

@@ -3993,14 +3993,24 @@ onUnmounted(() => {
                     </div>
                   </div>
                 </div>
-                <!-- 采购物流状态(始终显示,2026-10-17):有单号=公司+单号+轨迹展开;无单号=灰色"未同步"+行内同步按钮 -->
+                <!-- 采购物流状态(始终显示,2026-10-17):有单号=公司+单号+轨迹展开;无单号=灰色"未同步"+行内同步按钮
+                     2026-11-08:拼多多一单多包裹,主单号+包裹数徽标,第二行展开全部快递单号 -->
                 <div v-if="l.poLogisticsNo" class="sub po-logistics-line" :title="l.lastTraceDesc || ''">
                   <span class="logi-label">物流</span>
                   <span v-if="l.poLogisticsCompany">{{ l.poLogisticsCompany }}</span>
                   <a :href="trackingSearchUrl(l.poLogisticsCompany, l.poLogisticsNo)" target="_blank" rel="noopener" class="order-link" title="百度搜索物流状态">{{ l.poLogisticsNo }}</a>
+                  <span v-if="l.poPackages && l.poPackages.length > 1" class="pkg-count"
+                    :title="'该采购单拆分为 ' + l.poPackages.length + ' 个快递包裹'">等{{ l.poPackages.length }}个</span>
                   <button v-if="parseTraceSteps(l).length > 1" class="trace-toggle" :title="'共' + parseTraceSteps(l).length + '条轨迹'" @click.stop="traceOpen[l.id] = !traceOpen[l.id]">
                     {{ traceOpen[l.id] ? '收起' : '更多' }}
                   </button>
+                </div>
+                <div v-if="l.poPackages && l.poPackages.length > 1" class="sub po-packages-line">
+                  <span class="logi-label">包裹</span>
+                  <template v-for="(p, pi) in l.poPackages" :key="pi">
+                    <a :href="trackingSearchUrl(p.company, p.trackingNo)" target="_blank" rel="noopener" class="order-link" :title="(p.company || '') + ' 百度搜索物流状态'">{{ p.trackingNo }}</a>
+                    <span v-if="pi < l.poPackages.length - 1" class="pkg-sep">·</span>
+                  </template>
                 </div>
                 <div v-else class="sub po-logistics-empty" :title="'该采购单尚未同步到物流单号,点击「同步」即时拉取(' + (l.purchaseSn || '#' + l.id) + ')'">
                   <span class="logi-label">物流</span>
@@ -5964,6 +5974,27 @@ a.product-title:hover {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+/* 一单多包裹:包裹数徽标 + 全量单号行(2026-11-08) */
+.pkg-count {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #4338ca;
+  font-size: 10px;
+  line-height: 16px;
+  cursor: default;
+}
+.po-packages-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  margin-top: 2px;
+}
+.pkg-sep {
+  color: #d1d5db;
 }
 /* 采购物流状态标签 + 未同步占位(2026-10-17) */
 .logi-label {

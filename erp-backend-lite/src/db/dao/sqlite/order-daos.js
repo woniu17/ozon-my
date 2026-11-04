@@ -1432,6 +1432,22 @@ function findUncachedSkus(storeId) {
     .filter((n) => Number.isInteger(n) && n > 0);
 }
 
+/** 解析采购单一单多包裹快递单号(2026-11-08)
+ *  packages_json 为 [{company, trackingNo}];缺失/非法时降级为单个主单号(兼容旧数据) */
+function parsePoPackages(packagesJson, mainNo, mainCompany) {
+  if (packagesJson) {
+    try {
+      const arr = JSON.parse(packagesJson);
+      if (Array.isArray(arr) && arr.length) {
+        return arr
+          .filter((p) => p && p.trackingNo)
+          .map((p) => ({ company: p.company || '', trackingNo: String(p.trackingNo) }));
+      }
+    } catch { /* 非法 JSON 降级为单主单号 */ }
+  }
+  return mainNo ? [{ company: mainCompany || '', trackingNo: String(mainNo) }] : [];
+}
+
 /** 批量取采购关联+采购单(按包裹 id 列表) */
 function getPurchasesByPackageIds(packageIds) {
   if (!packageIds.length) return { links: [], purchases: [] };
@@ -1440,7 +1456,7 @@ function getPurchasesByPackageIds(packageIds) {
     .prepare(
       `SELECT pl.*, po.purchase_sn, po.platform, po.status AS po_status, po.payment_amount,
               po.seller_name, po.buyer_account, po.buyer_user_id, po.logistics_company AS po_logistics_company,
-              po.logistics_no AS po_logistics_no, po.link_status, po.items_json AS po_items_json,
+              po.logistics_no AS po_logistics_no, po.packages_json AS po_packages_json, po.link_status, po.items_json AS po_items_json,
               po.last_trace_at AS po_last_trace_at, po.last_trace_desc AS po_last_trace_desc, po.trace_json AS po_trace_json,
               po.pay_at AS po_pay_at, po.gmt_create AS po_gmt_create, po.send_at AS po_send_at
        FROM op_purchase_link pl
@@ -1478,6 +1494,8 @@ function getPurchasesByPackageIds(packageIds) {
         buyerUserId: l.buyer_user_id,
         poLogisticsCompany: l.po_logistics_company,
         poLogisticsNo: l.po_logistics_no,
+        // 一单多包裹全部快递单号(2026-11-08):[{company, trackingNo}],主单号在 poLogisticsNo
+        poPackages: parsePoPackages(l.po_packages_json, l.po_logistics_no, l.po_logistics_company),
         poPayAt: l.po_pay_at,
         poGmtCreate: l.po_gmt_create,
         poSendAt: l.po_send_at,

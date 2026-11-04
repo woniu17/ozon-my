@@ -375,9 +375,11 @@ export function getMiaoshouPackageDetail(id) {
 
   const purchases = db
     .prepare(
-      `SELECT pur.*, m.synced_at AS map_synced_at
+      `SELECT pur.*, m.synced_at AS map_synced_at,
+              po.packages_json AS packages_json
        FROM miaoshou_purchase pur
        JOIN miaoshou_package_purchase_map m ON m.purchase_id = pur.id
+       LEFT JOIN op_purchase_order po ON po.platform = pur.platform AND po.purchase_sn = pur.purchase_sn
        WHERE m.package_id = ?
        ORDER BY m.synced_at DESC`
     )
@@ -387,7 +389,14 @@ export function getMiaoshouPackageDetail(id) {
       if (po.items_json) {
         try { items = JSON.parse(po.items_json) || []; } catch { items = []; }
       }
-      return { ...po, items_json: undefined, items };
+      // 一单多包裹全部快递单号(2026-11-08):来自 op_purchase_order.packages_json
+      let packages = [];
+      if (po.packages_json) {
+        try {
+          packages = (JSON.parse(po.packages_json) || []).filter((p) => p && p.trackingNo);
+        } catch { packages = []; }
+      }
+      return { ...po, items_json: undefined, packages_json: undefined, items, packages };
     });
 
   // 本地关联包裹的应计明细(存在 local_pkg_id 时)
