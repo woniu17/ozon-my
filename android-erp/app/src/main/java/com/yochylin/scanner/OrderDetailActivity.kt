@@ -65,7 +65,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** 订单详情：展示 + 同步/入库/提交发货/面单/同步采购物流 */
+/** 订单详情：展示 + 入库/提交发货/面单/采购/同步物流 */
 class OrderDetailActivity : ComponentActivity() {
 
     private val COLOR_PRIMARY = "#165dff"
@@ -1655,29 +1655,32 @@ class OrderDetailActivity : ComponentActivity() {
     private fun renderActions(p: Pkg) {
         dActionBar.removeAllViews()
 
-        // 同步订单
-        dActionBar.addView(actionButton("同步订单") { onSync() })
+        // 搁置/取消搁置(2026-11-08):统一放在最左;搁置后订单不再参与流转,可在列表「已搁置」中查看并恢复
+        dActionBar.addView(actionButton(if (p.isIgnored) "取消搁置" else "搁置") { onIgnore(p) })
 
-        // 搁置订单(2026-10-23):解除入库限制,点击时二次弹窗确认(用户确认后保持搁置)
-        // 2026-11:必须采购后才可入库——仅待入库可点入库
-        // 2026-11-03:Ozon 已在后台流转到 awaiting_registration/awaiting_deliver 的订单,后端幂等返回已入库并推进本地,按钮仍展示
+        // 待采集(待采购)订单仅展示 搁置+采购,采购为蓝底白字主按钮(2026-11-08)
+        val isWaitProcess = p.operateStatus == "wait_process"
+
+        // 采购（进入三步采购流程;统一文案为"采购",不再区分编辑/新增）
+        val launchPurchase = {
+            purchaseLauncher.launch(Intent(this, PurchaseActivity::class.java).putExtra("packageId", packageId))
+        }
+        dActionBar.addView(
+            if (isWaitProcess) primaryActionButton("采购", launchPurchase)
+            else actionButton("采购", launchPurchase)
+        )
+
+        // 同步物流：待采集(待采购)不显示,有采购记录才显示(2026-11-08 由"同步采购物流"改名)
+        if (!isWaitProcess && links.isNotEmpty()) {
+            dActionBar.addView(actionButton("同步物流") { onSyncLogistics() })
+        }
+
+        // 入库：仅待入库可点,放在最右(2026-11:必须采购后才可入库;Ozon 已流转的订单后端幂等返回已入库)
         val stockableOzonStatuses = setOf("awaiting_packaging", "awaiting_registration", "awaiting_deliver")
         val canShip = p.operateStatus == "wait_stock" && p.ozonStatus in stockableOzonStatuses
         if (canShip) {
             dActionBar.addView(actionButton("入库") { onShip(p) })
         }
-
-        // 采购（进入三步采购流程）
-        dActionBar.addView(actionButton(if (links.isNotEmpty()) "编辑采购" else "采购") {
-            purchaseLauncher.launch(Intent(this, PurchaseActivity::class.java).putExtra("packageId", packageId))
-        })
-
-        if (links.isNotEmpty() && p.operateStatus != "wait_process") {
-            dActionBar.addView(actionButton("同步采购物流") { onSyncLogistics() })
-        }
-
-        // 搁置/取消搁置(2026-11-08):搁置后订单不再参与流转,可在列表「已搁置」中查看并恢复
-        dActionBar.addView(actionButton(if (p.isIgnored) "取消搁置" else "搁置") { onIgnore(p) })
     }
 
     /** 搁置/取消搁置(2026-11-08):搁置时二次确认,取消搁置直接执行 */
@@ -1733,32 +1736,25 @@ class OrderDetailActivity : ComponentActivity() {
         }
     }
 
-    // ── 操作实现 ──
-    private fun onSync() {
-        // 同步接口可能耗时较长(2026-10-18):模态提示"正在同步订单中",至少展示800ms(对齐入库效果)
-        runWithBlockingLoading("正在同步订单，请稍候…") {
-            try {
-                val r = Api.post("/admin/api/order-process/sync-package", mapOf("packageId" to packageId)).asJsonObject
-                val parts = mutableListOf<String>()
-                parts.add(if (r.optBoolean("orderSynced")) "订单已同步" else "订单未更新")
-                val accrualRows = r.optInt("accrualRows", -1)
-                if (accrualRows >= 0) parts.add("应计 $accrualRows 行")
-                val before = r.get("statusBefore")?.asJsonObject
-                val after = r.get("statusAfter")?.asJsonObject
-                if (before != null && after != null) {
-                    val b = before.optString("ozon") + "/" + before.optString("operate")
-                    val a = after.optString("ozon") + "/" + after.optString("operate")
-                    if (b != a) parts.add("状态 $b → $a")
-                }
-                toast("同步完成:" + parts.joinToString(" · "))
-                markChanged()
-                loadDetail()
-            } catch (e: Exception) {
-                handleError(e)
-            }
+    /** 详情页主操作按钮：蓝底白字(待采集/待采购订单的采购按钮,2026-11-08) */
+    private fun primaryActionButton(text: String, onClick: () -> Unit): TextView {
+        return TextView(this).apply {
+            this.text = text
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            setRoundedBg(Color.parseColor(COLOR_PRIMARY), 10f)
+            setPadding(dp(24), dp(14), dp(24), dp(14))
+            val lp = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            lp.rightMargin = dp(10)
+            layoutParams = lp
+            setOnClickListener { onClick() }
         }
     }
 
+    // ── 操作实现 ──
     private fun onShip(p: Pkg) {
         val totalQty = (p.items?.sumOf { it.quantity ?: 0.0 } ?: 0.0).toLong()
         val doShip = {
@@ -1863,8 +1859,8 @@ class OrderDetailActivity : ComponentActivity() {
     }
 
     private fun onSyncLogistics() {
-        // 同步采购物流可能耗时较长(2026-10-18):模态提示"正在同步采购物流中",至少展示800ms(对齐入库效果)
-        runWithBlockingLoading("正在同步采购物流，请稍候…") {
+        // 同步物流可能耗时较长(2026-10-18):模态提示"正在同步物流中",至少展示800ms(对齐入库效果)
+        runWithBlockingLoading("正在同步物流，请稍候…") {
             try {
                 val r = Api.post(
                     "/admin/api/order-process/sync-package-purchase-logistics",
@@ -1888,7 +1884,7 @@ class OrderDetailActivity : ComponentActivity() {
 
     /**
      * 模态等待弹窗并执行网络操作（2026-10-18）：
-     * 保证弹窗至少展示 minShowMs(默认800ms)，避免同步订单/同步采购物流/设置库存等
+     * 保证弹窗至少展示 minShowMs(默认800ms)，避免同步物流/设置库存等
      * 快速接口一闪而过用户看不到"处理中"；结束后自动关闭弹窗。调用方在 block 内自行 try/catch。
      */
     private fun runWithBlockingLoading(message: String, minShowMs: Long = 800, block: suspend () -> Unit) {

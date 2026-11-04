@@ -260,7 +260,11 @@ function maybeBackfillFeishuNotify(store, posting) {
   // 2026-09-22 修复2:补发加 6h 状态变化窗口——存量老单的历史通知多由 webhook 发出过
   //   (claim 机制 9/20 上线未回填其标记),无窗口会整段重发造成轰炸。正常滞后为分钟级
   //   (fast 轮 2 分钟),6h 足够覆盖。
-  const BACKFILL_WINDOW_MS = 6 * 3600_000;
+  // 2026-11-04 修复3:6h 窗口 < mid 轮 8h 周期,导致已过 fast 轮 cutoff 的在途老单
+  //   (如 93036752-0054-1 集运中)晚于 6h 同步时揽收通知被静默跳过,feishu_pickup_notified_at
+  //   永远为空。延长到 24h,确保 mid 轮 8h 兜底能补上;存量远超 24h 的老单仍不补发,
+  //   不会造成历史轰炸。
+  const BACKFILL_WINDOW_MS = 24 * 3600_000;
   const now = Date.now();
   const inWindow = (t) => {
     const ms = Date.parse(t || '');
