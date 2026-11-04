@@ -24,6 +24,8 @@ import coil.load
 import com.yochylin.scanner.R
 import com.yochylin.scanner.model.Pkg
 import com.yochylin.scanner.model.PurchaseLink
+import com.yochylin.scanner.model.packageCount
+import com.yochylin.scanner.model.packagesDisplay
 import com.yochylin.scanner.setRoundedBg
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -589,7 +591,15 @@ class PackageAdapter(private val callbacks: Callbacks) :
             amountTv.visibility = if (l.allocatedAmount == null && count <= 0) View.GONE else View.VISIBLE
 
             val hasLogisticsNo = !l.poLogisticsNo.isNullOrBlank()
-            val logistics = if (hasLogisticsNo) "${l.poLogisticsCompany ?: ""} ${l.poLogisticsNo}".trim() else "未同步"
+            // 2026-11-08:拼多多一单多包裹,主行显示主单号+等N个,第二行列出其余全部单号
+            val multi = l.packageCount > 1
+            val logistics = if (hasLogisticsNo) {
+                buildString {
+                    append("物流:").append(l.poLogisticsCompany ?: "").append(" ").append(l.poLogisticsNo)
+                    if (multi) append("（等").append(l.packageCount).append("个）")
+                    l.packagesDisplay?.let { append("\n包裹:").append(it) }
+                }
+            } else "未同步"
             logisticsTv.text = "物流:$logistics"
             // 未同步显示浅灰占位,始终可见(2026-10-17)
             logisticsTv.visibility = View.VISIBLE

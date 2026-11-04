@@ -43,6 +43,7 @@ import com.yochylin.scanner.model.PlatformOrderGoods
 import com.yochylin.scanner.model.PlatformPromotion
 import com.yochylin.scanner.model.PlatformStore
 import com.yochylin.scanner.model.PlatformTab
+import com.yochylin.scanner.model.PoPackage
 import com.yochylin.scanner.model.PurchaseItem
 import com.yochylin.scanner.model.PurchaseItemArg
 import com.yochylin.scanner.model.PurchaseLink
@@ -159,6 +160,7 @@ class PurchaseActivity : ComponentActivity() {
         val items: List<PurchaseItem>,
         val poLogisticsNo: String?,
         val poLogisticsCompany: String?,
+        val poPackages: List<PoPackage>? = null,
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -415,6 +417,8 @@ class PurchaseActivity : ComponentActivity() {
                 items = first.items ?: emptyList(),
                 poLogisticsNo = first.poLogisticsNo,
                 poLogisticsCompany = first.poLogisticsCompany,
+                // 一单多包裹(2026-11-08):取第一个非空的 packages
+                poPackages = ls.firstNotNullOfOrNull { it.poPackages },
             )
         }
     }
@@ -801,8 +805,13 @@ class PurchaseActivity : ComponentActivity() {
             setPadding(0, dp(6), 0, 0)
         }
         if (!g.poLogisticsNo.isNullOrBlank()) {
+            // 2026-11-08:一单多包裹,主行=公司+主单号+等N个
+            val multi = (g.poPackages?.count { !it.trackingNo.isNullOrBlank() } ?: 0) > 1
             val logi = TextView(this).apply {
-                text = "${g.poLogisticsCompany ?: ""} ${g.poLogisticsNo}".trim()
+                text = buildString {
+                    append(g.poLogisticsCompany ?: "").append(" ").append(g.poLogisticsNo)
+                    if (multi) append("（等").append(g.poPackages?.count { !it.trackingNo.isNullOrBlank() } ?: 0).append("个）")
+                }.trim()
                 setTextColor(Color.parseColor(COLOR_TEXT))
                 textSize = 10f
                 setRoundedBg(Color.parseColor("#f2f3f5"), 6f)
@@ -827,6 +836,22 @@ class PurchaseActivity : ComponentActivity() {
         }
         logiRow.addView(logiBtn)
         card.addView(logiRow)
+
+        // 一单多包裹:展示其余全部快递单号(2026-11-08)
+        val others = g.poPackages
+            ?.mapNotNull { it.trackingNo?.takeIf { n -> n.isNotBlank() } }
+            ?.filter { it != g.poLogisticsNo }
+        if (!others.isNullOrEmpty()) {
+            val logiMore = TextView(this).apply {
+                text = "包裹:${others.joinToString(" / ")}"
+                setTextColor(Color.parseColor(COLOR_MUTE))
+                textSize = 10f
+                setRoundedBg(Color.parseColor("#f2f3f5"), 6f)
+                setPadding(dp(8), dp(5), dp(8), dp(5))
+                setOnClickListener { copyText(others.joinToString(" / "), "快递单号") }
+            }
+            card.addView(logiMore)
+        }
 
         // 删除/恢复
         val actionRow = LinearLayout(this).apply {

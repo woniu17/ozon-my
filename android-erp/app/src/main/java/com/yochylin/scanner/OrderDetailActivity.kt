@@ -56,6 +56,8 @@ import com.yochylin.scanner.model.PurchaseHistory
 import com.yochylin.scanner.model.PurchaseItem
 import com.yochylin.scanner.model.PurchaseLink
 import com.yochylin.scanner.model.Trace
+import com.yochylin.scanner.model.packageCount
+import com.yochylin.scanner.model.packagesDisplay
 import com.yochylin.scanner.model.StockInfo
 import com.yochylin.scanner.model.StockListResponse
 import kotlinx.coroutines.Dispatchers
@@ -1148,10 +1150,14 @@ class OrderDetailActivity : ComponentActivity() {
             card.addView(buildPurchaseGoodsRow(pi))
         }
 
-        // 物流
+        // 物流(2026-11-08:拼多多一单多包裹,主行=公司+主单号+等N个,多包裹时追加全部单号行)
         if (!l.poLogisticsNo.isNullOrBlank()) {
+            val multi = l.packageCount > 1
             val logi = TextView(this).apply {
-                text = "${l.poLogisticsCompany ?: ""} ${l.poLogisticsNo}".trim()
+                text = buildString {
+                    append(l.poLogisticsCompany ?: "").append(" ").append(l.poLogisticsNo)
+                    if (multi) append("（等").append(l.packageCount).append("个）")
+                }.trim()
                 setTextColor(Color.parseColor(COLOR_PRIMARY))
                 textSize = 10f
                 setPadding(0, 4, 0, 0)
@@ -1160,6 +1166,19 @@ class OrderDetailActivity : ComponentActivity() {
                 copyText(l.poLogisticsNo!!, "快递单号")
             }
             card.addView(logi)
+            // 多包裹:列出其余全部快递单号,点击复制全部
+            l.packagesDisplay?.let { display ->
+                val logiMore = TextView(this).apply {
+                    text = "包裹:$display"
+                    setTextColor(Color.parseColor(COLOR_MUTE))
+                    textSize = 10f
+                    setPadding(0, 2, 0, 0)
+                }
+                logiMore.setOnClickListener {
+                    copyText(display, "快递单号")
+                }
+                card.addView(logiMore)
+            }
         }
 
         // 采购超24h未发货 / 物流超24h未揽收 提醒(2026-10-17,对齐列表页,时长可读)

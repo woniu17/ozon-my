@@ -146,6 +146,12 @@ data class PkgItem(
     val ozonWeightG: Double? = null,
 )
 
+/** 采购单一单多包裹(2026-11-08):{company, trackingNo},主单号见 poLogisticsNo */
+data class PoPackage(
+    val company: String? = null,
+    val trackingNo: String? = null,
+)
+
 data class PurchaseLink(
     val id: String = "",
     val purchaseOrderId: String? = null,
@@ -160,6 +166,7 @@ data class PurchaseLink(
     val allocatedAmount: Double? = null,
     val poLogisticsNo: String? = null,
     val poLogisticsCompany: String? = null,
+    val poPackages: List<PoPackage>? = null,
     val poSendAt: String? = null,
     val lastTraceAt: String? = null,
     val lastTraceDesc: String? = null,
@@ -176,6 +183,23 @@ data class PurchaseItem(
     val number: Double? = null,
     val num: Double? = null,
 )
+
+// ── 一单多包裹展示辅助(2026-11-08) ──
+/** 有效包裹数(>1 表示拆包多快递) */
+val PurchaseLink.packageCount: Int
+    get() = poPackages?.count { !it.trackingNo.isNullOrBlank() } ?: 0
+
+/** 其余快递单号展示文本(已排除主单号,多包裹时用),如 "79155302342430 / 79155302354286" */
+val PurchaseLink.packagesDisplay: String?
+    get() {
+        val main = poLogisticsNo?.takeIf { it.isNotBlank() }
+        val packs = poPackages
+            ?.mapNotNull { it.trackingNo?.takeIf { n -> n.isNotBlank() } }
+            ?.filter { it != main }
+            ?: emptyList()
+        if (packs.isEmpty()) return null
+        return packs.joinToString(" / ")
+    }
 
 /** 最近采购参考(2026-10-28):未采购订单同商品历史采购单,详情页录入采购时参考价格/供应商/买家账号
  *  2026-11:增加 items 商品明细,内容格式对齐采购信息卡 */
