@@ -2581,25 +2581,31 @@ router.post('/admin/api/order-process/carriage/history/list', async (req, res) =
     const storesMap = new Map((config.loadStores() || []).map((s) => [String(s.id), s]));
     for (const it of items) {
       const manual = manualByCarriage.get(Number(it.id)) || [];
-      if (!manual.length) continue;
-      const existingKeys = new Set((it.postings || []).map((p) => `${p?.store_id}|${p?.posting_number}`));
-      const objs = manual
-        .filter((m) => !existingKeys.has(`${m.storeId}|${m.postingNumber}`))
-        .map((m) => ({
-          posting_number: m.postingNumber,
-          store_id: m.storeId,
-          store_name: storesMap.get(String(m.storeId))?.name || '',
-          source: 'manual',
-          added_at: m.addedAt,
-          ozon_order_id: m.ozonOrderId,
-          package_id: m.packageId,
-          status: m.status,
-          products: [],
-        }));
-      if (objs.length) {
-        hydrateLocalPostings(objs);
-        it.postings = [...(it.postings || []), ...objs];
-        it.postings_count = Math.max(Number(it.postings_count) || 0, it.postings.length);
+      if (manual.length) {
+        const existingKeys = new Set((it.postings || []).map((p) => `${p?.store_id}|${p?.posting_number}`));
+        const objs = manual
+          .filter((m) => !existingKeys.has(`${m.storeId}|${m.postingNumber}`))
+          .map((m) => ({
+            posting_number: m.postingNumber,
+            store_id: m.storeId,
+            store_name: storesMap.get(String(m.storeId))?.name || '',
+            source: 'manual',
+            added_at: m.addedAt,
+            ozon_order_id: m.ozonOrderId,
+            package_id: m.packageId,
+            status: m.status,
+            products: [],
+          }));
+        if (objs.length) {
+          hydrateLocalPostings(objs);
+          it.postings = [...(it.postings || []), ...objs];
+          it.postings_count = Math.max(Number(it.postings_count) || 0, it.postings.length);
+        }
+      }
+      // 2026-11-08:无论本发运单是否有 manual 行,都要执行跨店补登记识别:
+      // 纯 Ozon 补登记发运单(如 125505607,货件被补登记到其它发运单)同样应标注
+      // "已随其它大包发出(Ozon 补登记)",不能因本单无 manual 行而跳过。
+      if (Array.isArray(it.postings) && it.postings.length) {
         attachCrossStoreShippedForPostings(it.postings, {
           currentStoreId: it.store_id,
           currentCarriageStatus: it.status,
