@@ -1430,6 +1430,10 @@ defineExpose({ refreshCurrent, listLoading });
                 {{ row.postings_count }}
                 <div v-if="row.deadline_24h_count" class="dl-badge">24h内 {{ row.deadline_24h_count }}</div>
                 <div v-if="row.deadline_overdue_count" class="dl-badge overdue">超时 {{ row.deadline_overdue_count }}</div>
+                <!-- 2026-11-08:本大包实际货件 / 补登记货件统计 -->
+                <div v-if="row.supplement_count != null" class="row-sub supplement-stats">
+                  实际 {{ row.actual_count }} · 补登记 {{ row.supplement_count }}
+                </div>
               </td>
               <td class="ops">
                 <button class="btn btn-ghost btn-sm" @click="openDetail(row)">详情</button>

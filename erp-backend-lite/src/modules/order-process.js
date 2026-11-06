@@ -2013,6 +2013,33 @@ function getLocalActivePostingCounts() {
   return new Map(rows.map((r) => [Number(r.carriage_id), Number(r.n)]));
 }
 
+// 为发运单列表附加"本大包实际货件 / 补登记货件"统计(2026-11-08)
+// 补登记货件 = 本发运单活跃货件中,在其它发运单存在 source='manual' 补记
+//   (且该发运单状态为 received/delivered/closed/formed)的货件数;
+// 本大包实际货件 = 活跃货件总数 - 补登记货件。
+function getCarriageSupplementCounts(carriageIds) {
+  const ids = [...new Set(carriageIds.map(Number).filter((x) => Number.isFinite(x) && x > 0))];
+  if (!ids.length) return new Map();
+  const slots = ids.map(() => '?').join(',');
+  const rows = db.prepare(
+    `SELECT cp.carriage_id AS carriageId,
+            COUNT(*) AS total,
+            SUM(CASE WHEN EXISTS (
+              SELECT 1 FROM op_carriage_posting m
+              JOIN op_carriage_history ch ON ch.carriage_id = m.carriage_id
+              WHERE m.source = 'manual' AND m.removed_at IS NULL
+                AND ch.status IN ('received','delivered','closed','formed')
+                AND m.store_id = cp.store_id
+                AND m.posting_number = cp.posting_number
+                AND m.carriage_id != cp.carriage_id
+            ) THEN 1 ELSE 0 END) AS supplement
+     FROM op_carriage_posting cp
+     WHERE cp.carriage_id IN (${slots}) AND cp.removed_at IS NULL
+     GROUP BY cp.carriage_id`
+  ).all(...ids);
+  return new Map(rows.map((r) => [Number(r.carriageId), { total: Number(r.total), supplement: Number(r.supplement) }]));
+}
+
 // 为发运清单附加"24h内发运期限 / 已超时"货件数(2026-11-02)
 // 数据源:本地 op_ozon_order.shipment_date(Ozon cutoff,与订单列表倒计时同源)。
 //   - 占位行(可创建发运):该配送方式下 status=awaiting_deliver 的货件
@@ -2475,6 +2502,17 @@ router.post('/admin/api/order-process/carriage/list', async (req, res) => {
         if (n > 0) c.postings_count = Math.max(n, Number(c.postings_count) || 0);
       }
     }
+    // 2026-11-08:附加"本大包实际货件 / 补登记货件"统计(跨店补登记识别,列表页展示)
+    const statMap = getCarriageSupplementCounts(
+      (r?.methods || []).flatMap((m) => (m.carriages || []).map((c) => Number(c.id)))
+    );
+    for (const m of r?.methods || []) {
+      for (const c of m.carriages || []) {
+        const st = statMap.get(Number(c.id));
+        c.supplement_count = st ? st.supplement : 0;
+        c.actual_count = st ? st.total - st.supplement : 0;
+      }
+    }
     // 2026-11-02:附加"24h内发运期限/已超时"货件数(本地 shipment_date 反查)
     try {
       await attachCarriageDeadlineCounts(store, r?.methods || []);
@@ -2559,6 +2597,13 @@ router.post('/admin/api/order-process/carriage/history/list', async (req, res) =
     for (const it of items) {
       const n = cntMap.get(Number(it.id)) || 0;
       if (n > 0) it.postings_count = Math.max(n, Number(it.postings_count) || 0);
+    }
+    // 2026-11-08:附加"本大包实际货件 / 补登记货件"统计(跨店补登记识别,列表页展示)
+    const statMap = getCarriageSupplementCounts(items.map((it) => Number(it.id)));
+    for (const it of items) {
+      const st = statMap.get(Number(it.id));
+      it.supplement_count = st ? st.supplement : 0;
+      it.actual_count = st ? st.total - st.supplement : 0;
     }
     // 2026-11-08:合并本地补记关联行(已完成发运单添加漏掉订单,source='manual',纯本地记录)。
     // 批量读一次全部活跃 manual 行按发运单分组,避免逐单查询。
