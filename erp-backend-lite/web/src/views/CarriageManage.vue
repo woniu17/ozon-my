@@ -105,14 +105,23 @@ function postingStatusText(p) {
   return ozonStatusLabel(p?.ozon_status);
 }
 // 2026-11-07:跨店大包已发出悬浮提示(来源发运单/状态/OGL 单号/加入时间)
+// 2026-11-08:formed(已形成)视为"已随大包创建发运",received/delivered/closed 视为"已随大包发出"
 function crossShippedTitle(p) {
   const s = p?.cross_store_shipped;
   if (!s) return '';
-  const parts = [`已随发运单 ${s.carriageId} 发出`];
+  const created = s.carriageStatus === 'formed';
+  const parts = [`已随发运单 ${s.carriageId} ${created ? '创建发运' : '发出'}`];
   if (s.carriageStatus) parts.push(`状态 ${s.carriageStatus}`);
   if (s.trackingNumber) parts.push(`OGL ${s.trackingNumber}`);
   if (s.addedAt) parts.push(`加入 ${s.addedAt}`);
   return parts.join('，');
+}
+// 2026-11-08:跨店补登记标签文案(formed=创建发运,已发出=Ozon 补登记)
+function crossShippedLabel(p) {
+  const s = p?.cross_store_shipped;
+  if (!s) return '';
+  const created = s.carriageStatus === 'formed';
+  return `📦 已随 ${s.carriageId} 大包${created ? '创建发运' : '发出（Ozon 补登记）'}`;
 }
 function hasAction(c, action) {
   return Array.isArray(c?.available_actions) && c.available_actions.includes(action);
@@ -1659,7 +1668,7 @@ defineExpose({ refreshCurrent, listLoading });
                     <span class="tag tag-ok">✅ 已随本发运单发出</span>
                   </div>
                   <div v-else-if="p.cross_store_shipped" class="carriage-shipped-tags">
-                    <span class="tag tag-info" :title="crossShippedTitle(p)">📦 已随 {{ p.cross_store_shipped.carriageId }} 大包发出（Ozon 补登记）</span>
+                    <span class="tag tag-info" :title="crossShippedTitle(p)">{{ crossShippedLabel(p) }}</span>
                   </div>
                 </td>
                 <td>
@@ -1943,7 +1952,7 @@ defineExpose({ refreshCurrent, listLoading });
                   </div>
                   <!-- 2026-11-07:已随跨店大包发出(加入当前发运单 = Ozon 补登记) -->
                   <div v-if="p.cross_store_shipped" class="carriage-shipped-tags">
-                    <span class="tag tag-info" :title="crossShippedTitle(p)">📦 已随 {{ p.cross_store_shipped.carriageId }} 大包发出（Ozon 补登记）</span>
+                    <span class="tag tag-info" :title="crossShippedTitle(p)">{{ crossShippedLabel(p) }}</span>
                   </div>
                 </td>
                 <td>

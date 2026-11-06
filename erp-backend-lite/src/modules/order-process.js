@@ -2277,7 +2277,8 @@ function buildManualPostingObjects(storeId, carriageId) {
 
 // ── 跨店大包已发出标注(2026-11-07) ──
 // 货件"已随跨店大包发出" ⟺ op_carriage_posting 存在 source='manual' 活跃行,
-// 且所属发运单(op_carriage_history.status)为 received/delivered/closed(已发出)。
+// 且所属发运单(op_carriage_history.status)为 received/delivered/closed(已发出)
+// 或 formed(已形成,用户已补记视为"已随大包创建发运",2026-11-08)。
 // 用途:
 //   - 发运单货件列表:ozon 行标注 cross_store_shipped(已随其它大包发出,当前发运单为 Ozon 补登记);
 //     manual 行在所属发运单已完成时标注 shipped_with_this_carriage(已随本发运单发出)。
@@ -2294,7 +2295,9 @@ function attachCrossStoreShippedForPostings(postings, { currentStoreId, currentC
     const whereParts = [
       "cp.source = 'manual'",
       'cp.removed_at IS NULL',
-      "ch.status IN ('received', 'delivered', 'closed')",
+      // 2026-11-08:formed(已形成)也纳入——用户已补记的货件视为"已随大包创建发运";
+      // received/delivered/closed 视为"已随大包发出",前端按 carriageStatus 区分文案。
+      "ch.status IN ('received', 'delivered', 'closed', 'formed')",
       `(cp.store_id || '|' || cp.posting_number) IN (${slots})`,
     ];
     const whereArgs = [...keys];

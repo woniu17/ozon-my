@@ -1122,7 +1122,8 @@ function attachCarriageOglTracking(pkgRows) {
 
 // ── 跨店大包已发出识别:读时 join 派生(2026-11-07) ──
 // 货件"已随跨店大包发出" ⟺ op_carriage_posting 存在 source='manual' 的活跃行,
-// 且所属发运单(op_carriage_history.status)为 received/delivered/closed(已发出)。
+// 且所属发运单(op_carriage_history.status)为 received/delivered/closed(已发出)
+// 或 formed(已形成,用户已补记视为"已随大包创建发运",2026-11-08)。
 // 该标记用于:
 //   - 订单处理列表:显示"已随 xxx 大包发出"、隐藏发货倒计时(实际已交运)
 //   - 发运单货件列表:ozon 行标注"已随大包发出(Ozon 补登记)",manual 行标注"已随本发运单发出"
@@ -1143,7 +1144,7 @@ function attachCrossStoreShippedFlags(pkgRows) {
        JOIN op_carriage_history ch ON ch.carriage_id = cp.carriage_id
        WHERE cp.source = 'manual'
          AND cp.removed_at IS NULL
-         AND ch.status IN ('received', 'delivered', 'closed')
+         AND ch.status IN ('received', 'delivered', 'closed', 'formed')
          AND (cp.store_id || '|' || cp.posting_number) IN (${postingKeys.map(() => '?').join(',')})
        ORDER BY cp.added_at DESC`
     ).all(...postingKeys);

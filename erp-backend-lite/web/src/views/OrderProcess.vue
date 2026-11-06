@@ -3313,10 +3313,12 @@ function countdown(pkg) {
 }
 
 // 2026-11-07:跨店大包已发出悬浮提示(来源发运单/状态/OGL 单号)
+// 2026-11-08:formed(已形成)视为"已随大包创建发运",received/delivered/closed 视为"已随大包发出"
 function crossStoreShippedTitle(pkg) {
   const s = pkg?.crossStoreShipped;
   if (!s) return '';
-  const parts = [`已随发运单 ${s.carriageId} 发出`];
+  const created = s.carriageStatus === 'formed';
+  const parts = [`已随发运单 ${s.carriageId} ${created ? '创建发运' : '发出'}`];
   if (s.carriageStatus) parts.push(`状态 ${s.carriageStatus}`);
   if (s.trackingNumber) parts.push(`OGL ${s.trackingNumber}`);
   if (s.addedAt) parts.push(`加入 ${s.addedAt}`);
@@ -4079,7 +4081,7 @@ onUnmounted(() => {
                 <!-- Ozon状态展示原始值(如 awaiting_deliver),中文释义放悬浮提示 -->
                 <span class="tag mono" :class="pkg.ozonStatus === 'cancelled' ? 'tag-err' : 'tag-mute'" :title="ozonStatus(pkg.ozonStatus) + (pkg.substatus ? '(' + pkg.substatus + ')' : '')">{{ pkg.ozonStatus || '—' }}</span>
                 <!-- 跨店大包已发出(2026-11-07):已随跨店大包发出,后续发运/打单均为 Ozon 补登记 -->
-                <span v-if="pkg.crossStoreShipped" class="tag tag-info" style="margin-left: 4px" :title="crossStoreShippedTitle(pkg)">已随 {{ pkg.crossStoreShipped.carriageId }} 大包发出</span>
+                <span v-if="pkg.crossStoreShipped" class="tag tag-info" style="margin-left: 4px" :title="crossStoreShippedTitle(pkg)">已随 {{ pkg.crossStoreShipped.carriageId }} 大包{{ pkg.crossStoreShipped.carriageStatus === 'formed' ? '创建发运' : '发出' }}</span>
                 <span :class="purchaseTag(pkg).cls" style="margin-left: 4px">{{ purchaseTag(pkg).label }}</span>
                 <span v-if="arrivedTag(pkg)" :class="arrivedTag(pkg).cls" style="margin-left: 4px">{{ arrivedTag(pkg).label }}</span>
               </div>
