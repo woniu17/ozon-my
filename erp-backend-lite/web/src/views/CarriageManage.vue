@@ -185,6 +185,15 @@ const detail = reactive({
   cancelling: false,
 });
 
+// 2026-11-08:发运详情货件统计(本大包实际货件 / Ozon 补登记)
+// 补登记 = 货件带 cross_store_shipped 标记(已随其它大包创建发运/发出,本发运单仅为 Ozon 补登记);
+// 本大包实际货件 = 总货件 - 补登记。
+const detailStats = computed(() => {
+  const ps = detail.postings || [];
+  const supplement = ps.filter((p) => p.cross_store_shipped).length;
+  return { total: ps.length, actual: ps.length - supplement, supplement };
+});
+
 // 快递员联系方式配置(2026-10-30,支持多条 + 默认项)
 const contactConfigs = reactive({
   loaded: false,
@@ -1499,6 +1508,19 @@ defineExpose({ refreshCurrent, listLoading });
             <span class="detail-label">货件数量</span>
             <span class="detail-value">
               {{ detail.postingsLoading ? '加载中…' : detail.postings.length }}
+            </span>
+          </div>
+          <!-- 2026-11-08:本大包实际货件 / Ozon 补登记统计 -->
+          <div class="detail-item">
+            <span class="detail-label">本大包实际货件</span>
+            <span class="detail-value">
+              {{ detail.postingsLoading ? '加载中…' : detailStats.actual }}
+            </span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">补登记货件</span>
+            <span class="detail-value">
+              {{ detail.postingsLoading ? '加载中…' : detailStats.supplement }}
             </span>
           </div>
           <div class="detail-item">
