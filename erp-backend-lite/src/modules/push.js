@@ -32,4 +32,29 @@ router.get('/admin/api/push/logs', (req, res) => {
   res.json({ logs: rows });
 });
 
+// 查询某货件是否已推送过新订单通知（2026-11-07 新增）
+// 供安卓端差集兜底二次去重：差集识别出"新增"订单时先查服务端权威记录，
+// 已推送过则只更新基线不重复弹通知，避免待处理列表排名波动导致重复推送。
+// GET /admin/api/push/notified?postingNumber=0259566705-0021-1
+//   → { notified: true, notifiedAt: '2026-11-07 00:06:35' }
+router.get('/admin/api/push/notified', (req, res) => {
+  const postingNumber = String(req.query.postingNumber || '').trim();
+  if (!postingNumber) {
+    return res.status(400).json({ error: 'postingNumber 必填' });
+  }
+  const row = getDb()
+    .prepare(
+      `SELECT created_at
+       FROM notification_log
+       WHERE type = 'NEW_ORDER' AND posting_number = ?
+       ORDER BY id DESC
+       LIMIT 1`
+    )
+    .get(postingNumber);
+  res.json({
+    notified: !!row,
+    notifiedAt: row ? row.created_at : null,
+  });
+});
+
 export default router;

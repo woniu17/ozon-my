@@ -23,6 +23,7 @@ import com.google.gson.JsonParser
 import com.yochylin.scanner.adapter.fmtMoney
 import com.yochylin.scanner.api.Api
 import com.yochylin.scanner.api.ApiException
+import com.yochylin.scanner.api.optBoolean
 import com.yochylin.scanner.api.optDouble
 import com.yochylin.scanner.api.optInt
 import com.yochylin.scanner.api.optString
@@ -93,8 +94,10 @@ class NewOrderNotifyService : Service() {
         const val NOTIFICATION_ORDER_EVENT_BASE = 1100
         const val PUSH_TIMEOUT_MS = 25_000
         const val FALLBACK_INTERVAL_MS = 5 * 60_000L
-        const val NOTIFIED_MAX = 50
-        const val LIST_SIZE = 10
+        // 2026-11-07 修复重复推送：去重集合从 50 扩到 500，避免早期货件号被挤出导致差集重复通知
+        const val NOTIFIED_MAX = 500
+        // 2026-11-07 修复重复推送：差集基线从 10 扩到 50，减少排名波动导致"旧单进前10"误判为新订单
+        const val LIST_SIZE = 50
     }
 
     /** 状态事件通知自增 ID(多单并发到达不互相覆盖) */
@@ -497,11 +500,28 @@ class NewOrderNotifyService : Service() {
             }
 
             val lastSns = Session.lastWaitProcessSns
+            // 先更新基线：无论本次是否通知，避免订单因排名波动反复进入候选
+            Session.lastWaitProcessSns = currentSns
+
             // 与 WebSocket 事件共用 tryMarkNotified：差集识别出的新单也立即标记（键 NEW_ORDER:单号），
             // 避免后续 WebSocket 推送同一订单时重复通知（评审 P0-1/P1-2）
-            val newOrders = currentSns.filter { it !in lastSns && tryMarkNotified("NEW_ORDER:$it") }
-                .mapNotNull { sn -> current.find { it.postingNumber == sn } }
-            Session.lastWaitProcessSns = currentSns
+            val newOrders = mutableListOf<NewOrderInfo>()
+            for (sn in currentSns) {
+                if (sn in lastSns) continue
+                if (!tryMarkNotified("NEW_ORDER:$sn")) continue
+                val order = current.find { it.postingNumber == sn } ?: continue
+                // 2026-11-07 二次去重：服务端 notification_log 已有该单 NEW_ORDER 推送记录时不再重复弹通知。
+                // 接口异常时不拦截（默认 false 照常通知），保证 WS 断线期间真正的新订单不漏报。
+                val serverNotified = try {
+                    Api.get("/admin/api/push/notified", mapOf("postingNumber" to sn))
+                        .asJsonObject
+                        .optBoolean("notified", false)
+                } catch (_: Exception) {
+                    false
+                }
+                if (serverNotified) continue
+                newOrders.add(order)
+            }
 
             if (newOrders.isNotEmpty()) {
                 sendNewOrderNotification(waitCount, newOrders.size.toLong(), newOrders)
