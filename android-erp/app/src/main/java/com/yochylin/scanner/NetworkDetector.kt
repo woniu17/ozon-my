@@ -29,9 +29,10 @@ import java.util.concurrent.CopyOnWriteArraySet
  */
 object NetworkDetector {
 
-    const val INTRANET_HOST = "192.168.1.212"
-    const val INTRANET_PORT = 3001
-    const val INTRANET_BASE = "http://192.168.1.212:3001"
+    // 2026-11-07：内网服务器改为 192.168.31.212，访问统一走域名 HTTPS（DNS 覆盖），探测对应端口
+    const val INTRANET_HOST = "192.168.31.212"
+    const val INTRANET_PORT = 17443
+    const val INTRANET_BASE = "https://yochylin.com:17443"
 
     /** 内网端口探测超时（毫秒）：局域网内正常应在百毫秒内返回 */
     private const val PROBE_TIMEOUT_MS = 1_500

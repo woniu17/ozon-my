@@ -14,7 +14,7 @@ import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
-import coil.ImageLoader
+import coil.Coil
 import coil.request.ImageRequest
 import coil.request.SuccessResult
 import com.google.gson.JsonArray
@@ -710,7 +710,8 @@ class NewOrderNotifyService : Service() {
         scope.launch(Dispatchers.IO) {
             try {
                 val absoluteUrl = if (imageUrl.startsWith("/")) Api.BASE_URL + imageUrl else imageUrl
-                val loader = ImageLoader(this@NewOrderNotifyService)
+                // 2026-11-07：使用 App 配置的全局 ImageLoader（复用 Api 的自定义 DNS，内网域名解析覆盖生效）
+                    val loader = Coil.imageLoader(this@NewOrderNotifyService)
                 val request = ImageRequest.Builder(this@NewOrderNotifyService)
                     .data(absoluteUrl)
                     .size(768)

@@ -9,6 +9,7 @@ import com.yochylin.scanner.NetworkDetector
 import com.yochylin.scanner.Session
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.Dns
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -17,6 +18,7 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import java.io.IOException
+import java.net.InetAddress
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
@@ -76,20 +78,41 @@ fun JsonObject.optDouble(key: String, default: Double = 0.0): Double {
 }
 
 object Api {
-    /** 内网模式走内网后端，否则走公网 HTTPS */
+    /** 统一使用公网域名 HTTPS；内网时通过自定义 DNS 将域名解析到内网服务器（2026-11-07），
+     *  URL/证书校验不变，仅连接目标 IP 切换，消除两套 BASE_URL。 */
     val BASE_URL: String
-        get() = if (Session.useIntranet) "http://192.168.1.212:3001" else "https://yochylin.com:17443"
+        get() = "https://yochylin.com:17443"
+
+    /** 自定义 DNS 覆盖（2026-11-07）：内网模式下把该域名解析到内网服务器 IP */
+    private const val CUSTOM_DNS_HOST = "yochylin.com"
+    private const val INTRANET_DNS_IP = "192.168.31.212"
 
     @PublishedApi
     internal val gson = Gson()
 
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
 
-    private val client: OkHttpClient by lazy {
+    /**
+     * 内网域名解析覆盖：仅在内网模式时把 CUSTOM_DNS_HOST 解析到内网 IP，
+     * 其余域名/公网场景走系统 DNS。OkHttp 每次建连时读取当前 useIntranet，
+     * 网络模式切换后无需重建 client。
+     */
+    private val customDns = object : Dns {
+        override fun lookup(hostname: String): List<InetAddress> =
+            if (hostname.equals(CUSTOM_DNS_HOST, ignoreCase = true) && Session.useIntranet) {
+                listOf(InetAddress.getByName(INTRANET_DNS_IP))
+            } else {
+                Dns.SYSTEM.lookup(hostname)
+            }
+    }
+
+    /** 全局 OkHttpClient（含自定义 DNS 与鉴权拦截器），供请求/WebSocket/Coil 图片共用 */
+    val client: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
+            .dns(customDns)
             .addInterceptor { chain ->
                 val original = chain.request()
                 val builder = original.newBuilder()

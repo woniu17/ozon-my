@@ -739,7 +739,7 @@ class OrderListFragment : Fragment() {
     }
 
     private fun networkModeToast(): String = when (Session.networkMode) {
-        Session.MODE_INTRANET -> "已切换为内网 192.168.1.212:3001"
+        Session.MODE_INTRANET -> "已切换为内网（yochylin.com → 192.168.31.212）"
         Session.MODE_PUBLIC -> "已切换为公网 yochylin.com:17443"
         else -> when {
             Session.useIntranet -> "已连接 Home-WiFi，自动使用内网"
