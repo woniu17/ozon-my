@@ -54,12 +54,12 @@ const inflight = new Map();
 /**
  * 请求级图片图床上下文(2026-10-17 内网直连修复)
  *
- * 背景:安卓/H5 常通过内网直连 ERP(http://192.168.1.212:3001,不经 nginx),
+ * 背景:安卓/H5 常通过内网直连 ERP(如 http://192.168.x.x:3001,不经 nginx),
  * 而图片 URL 若固定用公网 IMAGE_HOST_BASE_URL(yochylin.com:17443),
  * 内网设备无法回环访问公网域名 → 图片加载失败。
  * 解决:用 AsyncLocalStorage 记录每个请求的图床 base URL——
  *   公网 nginx 转发(X-Forwarded-Proto: https)→ https://yochylin.com:17443
- *   内网直连(X-Forwarded-Proto 无)→ http://192.168.1.212:3001
+ *   内网直连(X-Forwarded-Proto 无)→ http://<内网IP>:3001
  * 输出层 imageCacheUrlFor 自动取当前请求的 base,前端/安卓零改动。
  */
 const imageCtx = new AsyncLocalStorage();
@@ -116,6 +116,15 @@ const HEADERS_TIMEOUT_MS = 10_000;
 const BODY_TIMEOUT_MS = 30_000;
 const MAX_BYTES = 20 * 1024 * 1024; // 20MB
 
+/** 是否为内网私有 IP(192.168.x / 10.x / 172.16-31.x)，用于图床前缀识别 */
+function isPrivateIp(host) {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!m) return false;
+  const a = Number(m[1]);
+  const b = Number(m[2]);
+  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+}
+
 /** 是否允许下载该 URL(协议 + 域名白名单) */
 export function isAllowedImageUrl(url) {
   try {
@@ -150,15 +159,17 @@ export function imageCacheUrlFor(url) {
   if (!s || s.startsWith('data:')) return url;
   // 已是本图床 URL 直接透传
   if (s.startsWith(base)) return url;
-  // 已含图床路径的 URL:回环地址前缀(localhost/127.0.0.1)与相对路径统一重写为当前 base,
-  // 其余图床地址(如内网 192.168.x.x)透传,防止二次缓存(2026-11-08)。
+  // 已含图床路径的 URL:相对路径、本机回环地址、内网私有地址(192.168.x.x 直连 ERP)
+  // 统一重写为当前请求的 base;其余图床地址(远程图床模式)透传,防止二次缓存。
+  // 2026-11-08 修复:数据库可能缓存内网绝对 URL,公网访问时若透传会导致图片加载失败,
+  // 因此把内网前缀也重写为当前 base。
   const cacheIdx = s.indexOf('/images/cache/');
   if (cacheIdx >= 0) {
     if (cacheIdx === 0) return base + s; // 相对路径 → 补全当前 base
     try {
       const u = new URL(s.slice(0, cacheIdx));
       const h = u.hostname.toLowerCase();
-      if (h === 'localhost' || h === '127.0.0.1' || h === '::1') {
+      if (h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]' || isPrivateIp(h)) {
         return base + s.slice(cacheIdx);
       }
     } catch { /* 前缀非标准 URL,透传 */ }
