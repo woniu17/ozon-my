@@ -2713,11 +2713,16 @@ router.post('/admin/api/order-process/carriage/posting-list', async (req, res) =
       attachPostingShipmentDates(store.id, r.postings);
     }
     // 2026-11-02:读路径顺带刷新本地"货件↔发运单"关联(仅 Ozon 本店行)
+    // 2026-11-09:本地关联刷新是次要操作,失败只记日志,不阻塞货件列表返回
     if (r?.postings) {
-      syncCarriagePostings(store.id, carriageId, r.postings, {
-        deliveryMethodId: req.body?.deliveryMethodId,
-        departureDate: req.body?.departureDate,
-      });
+      try {
+        syncCarriagePostings(store.id, carriageId, r.postings, {
+          deliveryMethodId: req.body?.deliveryMethodId,
+          departureDate: req.body?.departureDate,
+        });
+      } catch (e) {
+        logger.warn({ err: e?.message, storeId: store.id, carriageId }, '[order-process] 刷新货件-发运单关联失败(读路径)');
+      }
     }
     // 2026-11-02:合并跨店手动关联行(大包混装);历史快照须包含跨店货件,
     // 因此 postings_json 在合并完成后统一写入。
@@ -2862,11 +2867,16 @@ router.post('/admin/api/order-process/carriage/available-postings', async (req, 
     const deliveryMethodId = req.body?.deliveryMethodId;
     const current = await carriagePostingList(store, carriageId, { limit: 100 });
     // 2026-11-02:读路径顺带刷新本地货件-发运单关联
+    // 2026-11-09:本地关联刷新是次要操作,失败只记日志,不阻塞货件列表返回
     if (current?.postings) {
-      syncCarriagePostings(store.id, carriageId, current.postings, {
-        deliveryMethodId,
-        departureDate: req.body?.departureDate,
-      });
+      try {
+        syncCarriagePostings(store.id, carriageId, current.postings, {
+          deliveryMethodId,
+          departureDate: req.body?.departureDate,
+        });
+      } catch (e) {
+        logger.warn({ err: e?.message, storeId: store.id, carriageId }, '[order-process] 刷新货件-发运单关联失败(读路径)');
+      }
     }
     const currentSet = new Set((current?.postings || []).map((p) => p.posting_number));
     const candidates = [];

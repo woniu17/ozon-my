@@ -15,6 +15,7 @@
 //   - removed_at 软删除:货件移出发运单/发运取消时置值,保留历史轨迹
 //   - 冗余 ozon_order_id / package_id:便于 JOIN op_ozon_order / op_package(头程单号、操作状态)
 import { db } from '../../index.js';
+import logger from '../../../middleware/log.js';
 
 // 由货件号反查本地订单/包裹 ID(冗余列来源;拆单子件号(-N)也能命中)
 function lookupOrderLink(storeId, postingNumber) {
@@ -46,34 +47,52 @@ export function upsertCarriagePostingRow({ storeId, carriageId, posting, deliver
   if (!storeId || !Number(carriageId) || !postingNumber) return;
   const ts = now || new Date().toISOString();
   const { ozonOrderId, packageId } = lookupOrderLink(storeId, postingNumber);
-  db.prepare(
-    `INSERT INTO op_carriage_posting
-       (store_id, carriage_id, posting_number, ozon_order_id, package_id,
-        delivery_method_id, departure_date, status, source, added_at, removed_at, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
-     ON CONFLICT(store_id, carriage_id, posting_number) DO UPDATE SET
-       ozon_order_id = excluded.ozon_order_id,
-       package_id = excluded.package_id,
-       delivery_method_id = excluded.delivery_method_id,
-       departure_date = excluded.departure_date,
-       status = excluded.status,
-       source = excluded.source,
-       removed_at = NULL,
-       updated_at = excluded.updated_at`
-  ).run(
-    String(storeId),
-    Number(carriageId),
-    String(postingNumber),
-    ozonOrderId,
-    packageId,
-    deliveryMethodId != null ? Number(deliveryMethodId) : null,
-    departureDate || null,
-    status || posting?.status || null,
-    source || 'ozon',
-    ts,
-    ts,
-    ts
-  );
+  try {
+    db.prepare(
+      `INSERT INTO op_carriage_posting
+         (store_id, carriage_id, posting_number, ozon_order_id, package_id,
+          delivery_method_id, departure_date, status, source, added_at, removed_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+       ON CONFLICT(store_id, carriage_id, posting_number) DO UPDATE SET
+         ozon_order_id = excluded.ozon_order_id,
+         package_id = excluded.package_id,
+         delivery_method_id = excluded.delivery_method_id,
+         departure_date = excluded.departure_date,
+         status = excluded.status,
+         source = excluded.source,
+         removed_at = NULL,
+         updated_at = excluded.updated_at`
+    ).run(
+      String(storeId),
+      Number(carriageId),
+      String(postingNumber),
+      ozonOrderId,
+      packageId,
+      deliveryMethodId != null ? Number(deliveryMethodId) : null,
+      departureDate || null,
+      status || posting?.status || null,
+      source || 'ozon',
+      ts,
+      ts,
+      ts
+    );
+  } catch (e) {
+    // 部分唯一索引冲突(2026-11-09):同一货件已在另一个发运单有活跃的相同 source 行
+    // (Ozon 侧货件同时出现在多个发运单列表的异常数据)。本地唯一约束要求"同一货件当前
+    // 只能在一个发运单",此处保留先插入的发运单归属,跳过本次关联,避免读路径整体失败。
+    const msg = String(e?.message || '');
+    if (
+      msg.includes('op_carriage_posting.store_id') &&
+      msg.includes('op_carriage_posting.posting_number')
+    ) {
+      logger.warn(
+        { storeId, carriageId, postingNumber, source: source || 'ozon', err: msg },
+        '[carriage-posting] 货件已在其它发运单活跃,跳过重复关联'
+      );
+      return;
+    }
+    throw e;
+  }
 }
 
 /**
