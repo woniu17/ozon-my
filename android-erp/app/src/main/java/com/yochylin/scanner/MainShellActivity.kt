@@ -2,16 +2,14 @@ package com.yochylin.scanner
 
 import android.Manifest
 import android.app.AlertDialog
-import android.app.DownloadManager
-import android.content.BroadcastReceiver
+import android.app.ProgressDialog
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.database.Cursor
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -24,6 +22,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
 
 /**
  * 宿主 Activity：承载底部导航四个模块 Fragment（底部栏常驻，切换不重建页面）
@@ -32,8 +31,6 @@ import java.io.File
 class MainShellActivity : FragmentActivity(), TabHost {
 
     private val fragments = mutableMapOf<String, Fragment>()
-
-    private var pendingDownloadId: Long = -1L
 
     // ── 新订单通知 ──
     private companion object {
@@ -63,18 +60,6 @@ class MainShellActivity : FragmentActivity(), TabHost {
                 "定位权限未开启，自动检测内网将不可用，可在系统设置中开启或手动选择网络模式",
                 Toast.LENGTH_LONG
             ).show()
-        }
-    }
-
-    /** 下载完成监听：自动拉起系统安装器 */
-    private val downloadReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action == DownloadManager.ACTION_DOWNLOAD_COMPLETE) {
-                val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
-                if (id == pendingDownloadId) {
-                    installApk(id)
-                }
-            }
         }
     }
 
@@ -108,12 +93,6 @@ class MainShellActivity : FragmentActivity(), TabHost {
             // 服务启动失败（如系统限制）时静默，不影响主流程
         }
 
-        ContextCompat.registerReceiver(
-            this,
-            downloadReceiver,
-            IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
-            ContextCompat.RECEIVER_EXPORTED
-        )
         checkUpdate()
     }
 
@@ -130,10 +109,6 @@ class MainShellActivity : FragmentActivity(), TabHost {
 
     override fun onDestroy() {
         super.onDestroy()
-        try {
-            unregisterReceiver(downloadReceiver)
-        } catch (_: Exception) {
-        }
     }
 
     override fun switchTab(tab: String) {
@@ -242,56 +217,81 @@ class MainShellActivity : FragmentActivity(), TabHost {
     }
 
     private fun startDownload(url: String) {
-        try {
-            val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
-            val request = DownloadManager.Request(Uri.parse(url))
-                .setTitle("扫描打单 新版本")
-                .setDescription("正在下载更新包…")
-                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                .setDestinationInExternalPublicDir(
-                    android.os.Environment.DIRECTORY_DOWNLOADS,
-                    "scanner-ship.apk"
-                )
-                .setMimeType("application/vnd.android.package-archive")
-            pendingDownloadId = dm.enqueue(request)
-            Toast.makeText(this, "开始下载更新包…", Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            // 下载管理器不可用时退回浏览器下载
-            try {
-                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-            } catch (_: Exception) {
+        // 2026-11-09:内网模式下系统 DownloadManager 不走 App 自定义 DNS(会解析到公网 IP 导致下载失败),
+        // 改用 OkHttp(Api.client 含自定义 DNS)下载到 App 外部目录,完成后直接拉起安装。
+        val dlg = ProgressDialog(this).apply {
+            setTitle("正在下载更新包")
+            setMessage("连接服务器…")
+            setProgressStyle(ProgressDialog.STYLE_HORIZONTAL)
+            setMax(100)
+            setCancelable(true)
+            setCanceledOnTouchOutside(false)
+        }
+        dlg.show()
+        lifecycleScope.launch {
+            val file = try {
+                withContext(Dispatchers.IO) {
+                    downloadToFile(url) { pct ->
+                        runOnUiThread { dlg.progress = pct }
+                    }
+                }
+            } catch (e: Exception) {
+                null
+            }
+            dlg.dismiss()
+            if (file != null) {
+                installApkFile(file)
+            } else {
+                Toast.makeText(this@MainShellActivity, "下载失败，请确认网络后重试", Toast.LENGTH_LONG).show()
             }
         }
     }
 
-    private fun installApk(downloadId: Long) {
-        try {
-            val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
-            val query = DownloadManager.Query().setFilterById(downloadId)
-            val cursor: Cursor? = dm.query(query)
-            if (cursor != null && cursor.moveToFirst()) {
-                val uri = cursor.getString(cursor.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI))
-                if (!uri.isNullOrBlank()) {
-                    // Android 7.0+ 禁止 file:// 暴露给其他应用，file:// 需经 FileProvider 转 content://
-                    val apkUri = if (uri.startsWith("file://")) {
-                        FileProvider.getUriForFile(
-                            this,
-                            "${packageName}.fileprovider",
-                            File(Uri.parse(uri).path!!)
-                        )
-                    } else {
-                        Uri.parse(uri)
+    /** 用 OkHttp(含自定义 DNS)下载 APK 到 App 外部目录 */
+    private fun downloadToFile(url: String, onProgress: (Int) -> Unit): File {
+        val dir = File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "update")
+        if (!dir.exists()) dir.mkdirs()
+        val target = File(dir, "scanner-ship.apk")
+        val request = okhttp3.Request.Builder().url(url).build()
+        Api.client.newCall(request).execute().use { resp ->
+            if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
+            val body = resp.body ?: throw IOException("响应体为空")
+            val total = body.contentLength()
+            body.byteStream().use { input ->
+                target.outputStream().use { output ->
+                    val buf = ByteArray(64 * 1024)
+                    var done = 0L
+                    var lastPct = -1
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        output.write(buf, 0, n)
+                        done += n
+                        if (total > 0) {
+                            val pct = (done * 100 / total).toInt()
+                            if (pct != lastPct) {
+                                lastPct = pct
+                                onProgress(pct)
+                            }
+                        }
                     }
-                    val intent = Intent(Intent.ACTION_VIEW)
-                    intent.setDataAndType(apkUri, "application/vnd.android.package-archive")
-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    startActivity(intent)
                 }
             }
-            cursor?.close()
+        }
+        return target
+    }
+
+    /** 安装已下载的 APK（Android 7.0+ 经 FileProvider 转 content://） */
+    private fun installApkFile(file: File) {
+        try {
+            val apkUri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", file)
+            val intent = Intent(Intent.ACTION_VIEW)
+            intent.setDataAndType(apkUri, "application/vnd.android.package-archive")
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            startActivity(intent)
         } catch (e: Exception) {
-            Toast.makeText(this, "下载完成，请点击系统通知安装", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "下载完成，请到文件管理中安装", Toast.LENGTH_LONG).show()
         }
     }
 }
