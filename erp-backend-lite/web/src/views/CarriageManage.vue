@@ -995,7 +995,7 @@ async function onOpenCandidate() {
   }
 }
 
-// 本店货件候选(2026-11-09:跨发运单补发候选,双来源 = Ozon 当前列表中跨单货件 + 本地历史关联找回)
+// 本店货件候选(2026-11-09:未妥投池单来源 = awaiting_deliver 中曾在本店其他发运单记录过的货件)
 async function loadSelfCandidates() {
   candidate.loading = true;
   try {
@@ -1003,7 +1003,7 @@ async function loadSelfCandidates() {
       deliveryMethodId: detail.carriage?.delivery_method_id || undefined,
     });
     candidate.postings = data?.postings || [];
-    if (!candidate.postings.length) show('没有需补发的跨发运单货件', 'info');
+    if (!candidate.postings.length) show('没有曾在本店其他发运单记录过的待发运货件', 'info');
   } catch (err) {
     show(err.message || String(err), 'error');
   } finally {
@@ -2149,7 +2149,7 @@ defineExpose({ refreshCurrent, listLoading });
       <div class="candidate-head">
         <span v-if="candidate.loading" class="field-hint">加载中…</span>
         <span v-else-if="candidate.tab === 'self'" class="field-hint">
-          已记录在其他发运单(已发货)、可在本发运单补发的本店货件(共 {{ candidate.postings.length }} 个),勾选即补发,将同时记录在当前发运单
+          曾在本店其他发运单记录过、现回到可发运池的货件(共 {{ candidate.postings.length }} 个),勾选即补发到当前发运单
         </span>
         <span v-else class="field-hint">
           已选 {{ candidate.sourceStoreIds.length }}/{{ candidateStores.length }} 家店铺的待发运货件(共 {{ candidate.postings.length }} 个),已排除当前发运中货件
@@ -2168,7 +2168,7 @@ defineExpose({ refreshCurrent, listLoading });
         </button>
       </div>
       <div v-if="candidate.loading && !candidate.postings.length" class="list-empty">加载中…</div>
-      <div v-else-if="!candidate.postings.length" class="list-empty">{{ candidate.tab === 'self' ? '没有需补发的跨发运单货件' : '没有符合筛选条件的待发运货件' }}</div>
+      <div v-else-if="!candidate.postings.length" class="list-empty">{{ candidate.tab === 'self' ? '没有曾在本店其他发运单记录过的待发运货件' : '没有符合筛选条件的待发运货件' }}</div>
       <table v-else class="posting-table candidate-table">
         <thead>
           <tr>
@@ -2186,12 +2186,12 @@ defineExpose({ refreshCurrent, listLoading });
             </td>
             <td class="mono">
               {{ p.posting_number }}
-              <!-- 2026-11-09:已发货(在其他发运单)候选标记,勾选确认即补发 -->
+              <!-- 2026-11-09:曾记录(在其他发运单)候选标记,勾选确认即补发 -->
               <span
                 v-if="p.inOtherCarriage"
                 class="reship-tag"
-                :title="`该货件已在发运单 #${p.otherCarriageId} 发出,勾选后将同时记录在当前发运单`"
-              >已发货·在 #{{ p.otherCarriageId }}</span>
+                :title="`该货件曾记录在发运单 #${p.otherCarriageId},勾选即补发到当前发运单`"
+              >曾记录·在 #{{ p.otherCarriageId }}</span>
             </td>
             <td v-if="candidate.tab === 'cross' || candidate.tab === 'history'">
               <div class="candidate-store">{{ p.store_name || p.store_id }}{{ String(p.store_id) === String(storeId) ? '(本店)' : '·跨店' }}</div>
