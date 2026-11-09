@@ -171,6 +171,7 @@ const detail = reactive({
   carriage: null,
   postings: [],
   manualSnapshot: [], // 2026-11-02:进入详情时的跨店货件快照(保存时 diff 本地增删)
+  crossCarriagePostings: [], // 2026-11-09:已在其他发运单活跃的货件(不弹窗,列表区提示条展示)
   postingsLoading: false,
   contact: [],
   contactLoading: false,
@@ -492,20 +493,10 @@ async function loadCreatePostings() {
     // 默认全选:创建后仅当用户取消勾选时才调用 set-postings 覆盖
     createModal.selectedPostingNumbers = createModal.postings.map((p) => p.posting_number).filter(Boolean);
     createModal.allSelected = true;
-    // 2026-11-09:提示已在其他发运单活跃的货件(补发场景,创建后可能同时记录在多个发运单)
+    // 2026-11-09:已在其他发运单的货件在列表行内标记"已发货·在#xxx",此处仅简短提示
     const existing = data?.existingCarriagePostings || [];
     if (existing.length) {
-      const seen = new Set();
-      const listText = existing
-        .filter((c) => {
-          const k = `${c.postingNumber}|${c.carriageId}`;
-          if (seen.has(k)) return false;
-          seen.add(k);
-          return true;
-        })
-        .map((c) => `${c.postingNumber}(发运单 #${c.carriageId})`)
-        .join('、');
-      show(`以下货件已在其他发运单,创建后可能同时记录在多个发运单(补发场景):${listText}`, 'warning');
+      show(`${existing.length} 个货件已在其他发运单(已发货),创建后不会自动带出;如需补发可在发运单详情「添加货件」中处理`, 'warning');
     }
   } catch (err) {
     show(err.message || String(err), 'error');
@@ -681,6 +672,7 @@ async function openDetail(row) {
   detail.fromHistory = !!row.from_history;
   detail.carriage = row;
   detail.postings = [];
+  detail.crossCarriagePostings = [];
   detail.contact = [];
   detail.phone = '';
   detail.wechatNickname = '';
@@ -720,31 +712,8 @@ async function loadPostings(row) {
     // Ozon 实测 limit 上限 100(超限报 invalid AssemblyCarriagePostingListRequest.Limit)
     const data = await getCarriagePostings(storeId.value, Number(row.id), { limit: 100 });
     detail.postings = data?.postings || [];
-    // 2026-11-09:跨发运单货件提示补发(已在其他发运单活跃,默认保持旧单归属)
-    const cross = data?.crossCarriagePostings || [];
-    if (cross.length) {
-      const listText = cross
-        .map((c) => `${c.postingNumber}(发运单 #${c.carriageId})`)
-        .join('、');
-      const ok = await confirmStore.ask({
-        title: '检测到已在其他发运单的货件',
-        message: `以下货件已在其他发运单中,当前发运单默认不显示:\n${listText}\n\n是否补发到当前发运单?(补发后两个发运单都会记录该货件)`,
-        confirmText: '补发',
-        cancelText: '不补发',
-      });
-      if (ok) {
-        for (const c of cross) {
-          try {
-            await reshipCarriagePosting(storeId.value, Number(row.id), c.postingNumber);
-          } catch (err) {
-            show(`补发 ${c.postingNumber} 失败:${err.message || String(err)}`, 'error');
-          }
-        }
-        // 补发后重新加载货件列表
-        const data2 = await getCarriagePostings(storeId.value, Number(row.id), { limit: 100 });
-        detail.postings = data2?.postings || [];
-      }
-    }
+    // 2026-11-09:跨发运单货件不再弹窗询问,以列表区提示条展示(补发入口在「添加货件」弹窗)
+    detail.crossCarriagePostings = data?.crossCarriagePostings || [];
     // 2026-11-02:记录进入详情时的跨店货件快照(保存时 diff 本地增删)
     detail.manualSnapshot = detail.postings
       .filter((p) => p.source === 'manual')
@@ -1172,17 +1141,46 @@ async function onConfirmAddCandidates() {
     }
     return;
   }
+  // 2026-11-09:已在其他发运单(已发货)的货件 → 勾选即补发(reship 立即落库,两个发运单同时记录);
+  // 普通货件保持原有"加入列表 → 保存"流程(全量 set-postings 生效)。
+  const reshipItems = selected.filter((p) => p.inOtherCarriage);
+  const normalItems = selected.filter((p) => !p.inOtherCarriage);
+  let reshipped = 0;
+  if (reshipItems.length) {
+    candidate.saving = true;
+    try {
+      for (const p of reshipItems) {
+        try {
+          await reshipCarriagePosting(storeId.value, detail.carriageId, p.posting_number);
+          reshipped += 1;
+        } catch (err) {
+          show(`补发 ${p.posting_number} 失败:${err.message || String(err)}`, 'error');
+        }
+      }
+    } finally {
+      candidate.saving = false;
+    }
+  }
   const existing = new Set(detail.postings.map((p) => p.posting_number));
-  const added = selected.filter((p) => !existing.has(p.posting_number));
-  if (!added.length) {
+  const added = normalItems.filter((p) => !existing.has(p.posting_number));
+  if (added.length) {
+    detail.postings = [...detail.postings, ...added];
+    editPostings.dirty = true;
+  }
+  if (!reshipped && !added.length) {
     show('所选货件已在列表中', 'info');
     candidate.open = false;
     return;
   }
-  detail.postings = [...detail.postings, ...added];
-  editPostings.dirty = true;
   candidate.open = false;
-  show(`已加入 ${added.length} 个货件`, 'success');
+  const msgs = [];
+  if (reshipped) msgs.push(`已补发 ${reshipped} 个货件(将同时记录在两个发运单)`);
+  if (added.length) msgs.push(`已加入 ${added.length} 个货件${reshipped ? '(保存后生效)' : ''}`);
+  if (msgs.length) show(msgs.join(';'), 'success');
+  // 仅补发(无普通货件暂存)时刷新详情列表,让补发货件立即出现在当前发运单
+  if (reshipped && !added.length) {
+    await loadPostings(detail.carriage);
+  }
 }
 
 // 已完成发运单补记后刷新历史列表并重开详情(展示本地新增 manual 行)
@@ -1709,6 +1707,16 @@ defineExpose({ refreshCurrent, listLoading });
               {{ detail.postingsLoading ? '加载中…' : '刷新' }}
             </button>
           </div>
+          <!-- 2026-11-09:已在其他发运单的货件(已发货)提示条,不弹窗;补发入口在「添加货件」弹窗 -->
+          <div v-if="!detail.fromHistory && detail.crossCarriagePostings.length" class="carriage-reship-hint">
+            <span class="hint-icon">⚠️</span>
+            <span class="hint-text">
+              以下货件已在其他发运单(已发货),当前发运单不展示;如需补发请在「添加货件」中勾选:
+              <template v-for="(c, i) in detail.crossCarriagePostings" :key="c.postingNumber">
+                <em>{{ i ? '、' : '' }}{{ c.postingNumber }}(#{{ c.carriageId }})</em>
+              </template>
+            </span>
+          </div>
           <div v-if="detail.postingsLoading && !detail.postings.length" class="list-empty">加载中…</div>
           <div v-else-if="!detail.postings.length" class="list-empty">该发运暂无货件</div>
           <table v-else class="posting-table">
@@ -1729,6 +1737,10 @@ defineExpose({ refreshCurrent, listLoading });
                     <span class="mono">{{ p.posting_number }}</span>
                     <span v-if="p.source === 'manual'" class="cross-tag block-tag" :title="p.store_id">{{ p.store_name || p.store_id }}·跨店</span>
                     <span v-else class="self-tag block-tag">本店</span>
+                  </div>
+                  <!-- 2026-11-09:补发场景标记(货件同时记录在多个发运单) -->
+                  <div v-if="p.inOtherCarriage" class="carriage-shipped-tags">
+                    <span class="reship-tag" :title="`该货件已在发运单 #${p.otherCarriageId} 发出`">已发货·在 #{{ p.otherCarriageId }}</span>
                   </div>
                   <!-- 2026-11-07:跨店大包已发出标注(manual=已随本发运单发出;ozon=已随其它大包发出,Ozon补登记) -->
                   <div v-if="p.shipped_with_this_carriage" class="carriage-shipped-tags">
@@ -1829,7 +1841,10 @@ defineExpose({ refreshCurrent, listLoading });
         </thead>
         <tbody>
           <tr v-for="p in pendingPostings.postings" :key="p.posting_number">
-            <td class="mono">{{ p.posting_number }}</td>
+            <td class="mono">
+              {{ p.posting_number }}
+              <span v-if="p.inOtherCarriage" class="reship-tag" :title="`该货件已在发运单 #${p.otherCarriageId} 发出`">已发货·在 #{{ p.otherCarriageId }}</span>
+            </td>
             <td>
               <div v-if="(p.products || []).length" class="posting-products">
                 <div v-for="it in p.products" :key="it.sku || it.offer_id || it.name" class="posting-product">
@@ -2017,6 +2032,10 @@ defineExpose({ refreshCurrent, listLoading });
                     <span v-if="p.source === 'manual'" class="cross-tag block-tag" :title="p.store_id">{{ p.store_name || p.store_id }}·跨店</span>
                     <span v-else class="self-tag block-tag">本店</span>
                   </div>
+                  <!-- 2026-11-09:已在其他发运单(已发货)标记 -->
+                  <div v-if="p.inOtherCarriage" class="carriage-shipped-tags">
+                    <span class="reship-tag" :title="`该货件已在发运单 #${p.otherCarriageId} 发出`">已发货·在 #{{ p.otherCarriageId }}</span>
+                  </div>
                   <!-- 2026-11-07:已随跨店大包发出(加入当前发运单 = Ozon 补登记) -->
                   <div v-if="p.cross_store_shipped" class="carriage-shipped-tags">
                     <span class="tag tag-info" :title="crossShippedTitle(p)">{{ crossShippedLabel(p) }}</span>
@@ -2130,7 +2149,7 @@ defineExpose({ refreshCurrent, listLoading });
       <div class="candidate-head">
         <span v-if="candidate.loading" class="field-hint">加载中…</span>
         <span v-else-if="candidate.tab === 'self'" class="field-hint">
-          已准备发运、不在当前发运中的本店货件(共 {{ candidate.postings.length }} 个),勾选后加入
+          已准备发运、不在当前发运中的本店货件(共 {{ candidate.postings.length }} 个),勾选后加入;标记「已发货」的货件勾选即补发
         </span>
         <span v-else class="field-hint">
           已选 {{ candidate.sourceStoreIds.length }}/{{ candidateStores.length }} 家店铺的待发运货件(共 {{ candidate.postings.length }} 个),已排除当前发运中货件
@@ -2165,7 +2184,15 @@ defineExpose({ refreshCurrent, listLoading });
             <td class="candidate-check">
               <input v-model="candidate.selected[p.posting_number]" type="checkbox" />
             </td>
-            <td class="mono">{{ p.posting_number }}</td>
+            <td class="mono">
+              {{ p.posting_number }}
+              <!-- 2026-11-09:已发货(在其他发运单)候选标记,勾选确认即补发 -->
+              <span
+                v-if="p.inOtherCarriage"
+                class="reship-tag"
+                :title="`该货件已在发运单 #${p.otherCarriageId} 发出,勾选后将同时记录在当前发运单`"
+              >已发货·在 #{{ p.otherCarriageId }}</span>
+            </td>
             <td v-if="candidate.tab === 'cross' || candidate.tab === 'history'">
               <div class="candidate-store">{{ p.store_name || p.store_id }}{{ String(p.store_id) === String(storeId) ? '(本店)' : '·跨店' }}</div>
               <div class="candidate-time">打单 {{ fmtPrinted(p.printed_at || p.waybill_printed_at) }}</div>
@@ -2808,6 +2835,50 @@ defineExpose({ refreshCurrent, listLoading });
   padding: 1px 6px;
   max-width: 260px;
   white-space: normal;
+}
+
+/* ── 补发场景标记(2026-11-09) ── */
+.reship-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 16px;
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  white-space: nowrap;
+  vertical-align: 1px;
+}
+.candidate-table .reship-tag,
+.posting-table .reship-tag {
+  margin-left: 0;
+  margin-top: 4px;
+  display: block;
+  width: fit-content;
+}
+/* 详情列表区顶部提示条(不弹窗) */
+.carriage-reship-hint {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 10px 0 2px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  color: #92400e;
+  font-size: 12px;
+  line-height: 18px;
+}
+.carriage-reship-hint .hint-icon {
+  line-height: 18px;
+}
+.carriage-reship-hint .hint-text em {
+  font-style: normal;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  margin-right: 4px;
 }
 
 /* ── 候选弹窗:本店/跨店 tabs + 跨店筛选(2026-11-02) ── */

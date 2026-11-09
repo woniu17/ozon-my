@@ -2050,6 +2050,78 @@ function resolvePostingsForCarriage(storeId, carriageId, postings) {
   };
 }
 
+// 为货件列表附加"已在其他发运单"标记(2026-11-09):
+// 货件在本店其他发运单仍有活跃 ozon 行时,附加 inOtherCarriage=true 与 otherCarriageId,
+// 供前端在详情列表/待发运弹窗中直接标记"已发货·在其他发运单",无需弹窗确认。
+function attachInOtherCarriageMarks(postings, { storeId, excludeCarriageId } = {}) {
+  if (!Array.isArray(postings) || !postings.length) return postings;
+  const numbers = [...new Set(postings.map((p) => String(p?.posting_number || '').trim()).filter(Boolean))];
+  if (!numbers.length) return postings;
+  const ph = numbers.map(() => '?').join(',');
+  const args = [String(storeId), ...numbers];
+  let sql =
+    `SELECT posting_number AS postingNumber, carriage_id AS carriageId
+     FROM op_carriage_posting
+     WHERE store_id = ? AND source = 'ozon' AND removed_at IS NULL
+       AND posting_number IN (${ph})`;
+  if (excludeCarriageId != null) {
+    sql += ` AND carriage_id != ?`;
+    args.push(Number(excludeCarriageId));
+  }
+  const rows = db.prepare(sql).all(...args);
+  const byNumber = new Map();
+  for (const r of rows) {
+    if (!byNumber.has(r.postingNumber)) byNumber.set(r.postingNumber, Number(r.carriageId));
+  }
+  for (const p of postings) {
+    const otherCarriageId = byNumber.get(String(p?.posting_number));
+    if (otherCarriageId) {
+      p.inOtherCarriage = true;
+      p.otherCarriageId = otherCarriageId;
+    }
+  }
+  return postings;
+}
+
+// 构造"已在其他发运单"的本地候选货件(2026-11-09):
+// Ozon unfulfilled 列表不返回已列入发运单的货件,补发场景下需从添加弹窗中看到这类
+// 已发货货件。数据源为本地 op_carriage_posting 活跃 ozon 行(排除当前发运单),
+// 关联 op_carriage_history 取归属发运单状态,商品/状态由 hydrateLocalPostings 富化。
+function buildCrossCarriageCandidates(storeId, excludeCarriageId) {
+  if (!storeId || excludeCarriageId == null) return [];
+  const rows = db
+    .prepare(
+      `SELECT cp.store_id AS storeId, cp.carriage_id AS carriageId,
+              cp.posting_number AS postingNumber, cp.ozon_order_id AS ozonOrderId,
+              cp.package_id AS packageId, cp.delivery_method_id AS deliveryMethodId,
+              ch.status AS carriageStatus
+       FROM op_carriage_posting cp
+       LEFT JOIN op_carriage_history ch ON ch.carriage_id = cp.carriage_id
+       WHERE cp.store_id = ? AND cp.source = 'ozon' AND cp.removed_at IS NULL
+         AND cp.carriage_id != ?
+       ORDER BY cp.added_at DESC`
+    )
+    .all(String(storeId), Number(excludeCarriageId));
+  if (!rows.length) return [];
+  const stores = new Map((config.loadStores() || []).map((s) => [String(s.id), s]));
+  const candidates = rows.map((r) => ({
+    posting_number: r.postingNumber,
+    store_id: r.storeId,
+    store_name: stores.get(String(r.storeId))?.name || '',
+    source: 'ozon',
+    ozon_order_id: r.ozonOrderId,
+    package_id: r.packageId,
+    delivery_method_id: r.deliveryMethodId,
+    status: r.carriageStatus,
+    inOtherCarriage: true,
+    otherCarriageId: Number(r.carriageId),
+    otherCarriageStatus: r.carriageStatus || null,
+    products: [],
+  }));
+  hydrateLocalPostings(candidates);
+  return candidates;
+}
+
 // 本地活跃"发运-货件"关联计数(跨店全量;2026-11-06)
 // Ozon 实时接口对每个店铺只返回本店视角的货件列表/数量,跨店加入的货件看不到;
 // op_carriage_posting 是跨店聚合视图(添加货件/刷新关联/历史同步共同维护),按此补全展示口径。
@@ -2771,6 +2843,8 @@ router.post('/admin/api/order-process/carriage/posting-list', async (req, res) =
       if (resolved.crossCarriagePostings.length) {
         r.crossCarriagePostings = resolved.crossCarriagePostings;
       }
+      // 2026-11-09:补发后货件在详情列表展示时,行内标记"已发货·在其他发运单"
+      attachInOtherCarriageMarks(r.postings, { storeId: store.id, excludeCarriageId: Number(carriageId) });
     }
     // 2026-11-02:读路径顺带刷新本地"货件↔发运单"关联(仅 Ozon 本店行)
     // 2026-11-09:本地关联刷新是次要操作,失败只记日志,不阻塞货件列表返回
@@ -2887,7 +2961,8 @@ router.post('/admin/api/order-process/carriage/pending-postings', async (req, re
     }
     // 2026-11-07:标注"已随跨店大包发出"(Ozon 补登记识别,不排除)
     attachCrossStoreShippedForPostings(postings, { currentStoreId: store.id });
-    // 2026-11-09:标记已在其他发运单活跃的货件(创建发运/补发提示)
+    // 2026-11-09:标记已在其他发运单活跃的货件(创建发运弹窗行内标记,不弹窗)
+    attachInOtherCarriageMarks(postings, { storeId: store.id });
     const existingCarriagePostings = findPostingsInOtherCarriages(store.id, postings);
     res.json(ok({ postings, count: postings.length, existingCarriagePostings }));
   } catch (e) { carriageHandleError(e, req, res, '获取待发运货件'); }
@@ -3001,6 +3076,18 @@ router.post('/admin/api/order-process/carriage/available-postings', async (req, 
     if (candidates.length) attachPostingProductImages(store.id, candidates);
     // 2026-11-07:标注"已随跨店大包发出"(Ozon 补登记识别,不排除)
     attachCrossStoreShippedForPostings(candidates, { currentStoreId: store.id });
+    // 2026-11-09:本地补充"已在其他发运单"的候选货件——Ozon unfulfilled 列表不返回已列入
+    // 发运单的货件,补发场景需从添加弹窗中看到并勾选;补充项带 inOtherCarriage/otherCarriageId 标记。
+    const crossCandidates = buildCrossCarriageCandidates(store.id, carriageId);
+    if (crossCandidates.length) {
+      const seen = new Set(candidates.map((p) => p.posting_number));
+      for (const cc of crossCandidates) {
+        if (!seen.has(cc.posting_number)) {
+          candidates.push(cc);
+          seen.add(cc.posting_number);
+        }
+      }
+    }
     // 2026-11-09:标记已在其他发运单活跃的候选货件(补发提示)
     const existingCarriagePostings = findPostingsInOtherCarriages(store.id, candidates, carriageId);
     res.json(ok({ postings: candidates, count: candidates.length, existingCarriagePostings }));
