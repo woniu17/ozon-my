@@ -386,9 +386,15 @@ export function getCarriagePostings(storeId, carriageId, params = {}) {
 }
 
 // 待发运货件列表(可创建占位行用,2026-11-02):某配送方式下所有 awaiting_deliver 货件
-// → { postings: [{ posting_number, shipment_date, products[] }], count }
+// → { postings: [{ posting_number, shipment_date, products[] }], count, existingCarriagePostings? }
 export function getPendingPostings(storeId, deliveryMethodId) {
   return request.post('/admin/api/order-process/carriage/pending-postings', { storeId, deliveryMethodId });
+}
+
+// 补发货件(2026-11-09):将已在其他发运单活跃的货件显式记录到当前发运单(补发场景)
+// → { carriageId, postingNumber, fromCarriageId }
+export function reshipCarriagePosting(storeId, carriageId, postingNumber) {
+  return request.post('/admin/api/order-process/carriage/posting/reship', { storeId, carriageId, postingNumber });
 }
 
 // 确认发运(写操作) → { carriage_id }

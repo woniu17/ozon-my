@@ -40,12 +40,41 @@ function lookupOrderLink(storeId, postingNumber) {
  * source 默认 'ozon'(Ozon 同步行);跨店手动关联走 addManualCarriagePosting。
  * @param {{storeId:string, carriageId:number, posting:object,
  *          deliveryMethodId?:number, departureDate?:string, status?:string,
- *          source?:string, now?:string}} args
+ *          source?:string, now?:string, forceReship?:boolean}} args
+ *   forceReship=true 时跳过归属保持检查,显式把货件记录到当前发运单(补发接口用,2026-11-09)。
  */
-export function upsertCarriagePostingRow({ storeId, carriageId, posting, deliveryMethodId, departureDate, status, source, now } = {}) {
+export function upsertCarriagePostingRow({ storeId, carriageId, posting, deliveryMethodId, departureDate, status, source, now, forceReship } = {}) {
   const postingNumber = posting?.posting_number || posting?.postingNumber;
   if (!storeId || !Number(carriageId) || !postingNumber) return;
   const ts = now || new Date().toISOString();
+  // 2026-11-09 归属保持:Ozon 同步默认不自动跨发运单补发——货件已在其他发运单有活跃 ozon 行、
+  // 且当前发运单无该货件活跃记录时,保持旧发运单归属(避免 Ozon 侧异常重叠/历史遗留导致
+  // 新发运单自动记录);补发需显式 forceReship(reship 接口触发)。
+  if (!forceReship && (source || 'ozon') === 'ozon') {
+    const existingHere = db
+      .prepare(
+        `SELECT 1 FROM op_carriage_posting
+         WHERE store_id = ? AND carriage_id = ? AND posting_number = ? AND removed_at IS NULL
+         LIMIT 1`
+      )
+      .get(String(storeId), Number(carriageId), String(postingNumber));
+    if (!existingHere) {
+      const elsewhere = db
+        .prepare(
+          `SELECT 1 FROM op_carriage_posting
+           WHERE store_id = ? AND posting_number = ? AND source = 'ozon' AND removed_at IS NULL
+             AND carriage_id != ? LIMIT 1`
+        )
+        .get(String(storeId), String(postingNumber), Number(carriageId));
+      if (elsewhere) {
+        logger.info(
+          { storeId, carriageId, postingNumber, belongCarriageId: Number(elsewhere.carriage_id) },
+          '[carriage-posting] 货件已在其他发运单活跃,保持旧单归属(如需补发调用 reship)'
+        );
+        return;
+      }
+    }
+  }
   const { ozonOrderId, packageId } = lookupOrderLink(storeId, postingNumber);
   try {
     db.prepare(
@@ -77,9 +106,8 @@ export function upsertCarriagePostingRow({ storeId, carriageId, posting, deliver
       ts
     );
   } catch (e) {
-    // 部分唯一索引冲突(2026-11-09):同一货件已在另一个发运单有活跃的相同 source 行
-    // (Ozon 侧货件同时出现在多个发运单列表的异常数据)。本地唯一约束要求"同一货件当前
-    // 只能在一个发运单",此处保留先插入的发运单归属,跳过本次关联,避免读路径整体失败。
+    // 防御性捕获(2026-11-09):部分唯一索引已放宽,正常不再触发;若未来加回索引或出现
+    // 其他 UNIQUE 冲突,保留旧发运单归属,跳过本次关联,避免读路径整体失败。
     const msg = String(e?.message || '');
     if (
       msg.includes('op_carriage_posting.store_id') &&

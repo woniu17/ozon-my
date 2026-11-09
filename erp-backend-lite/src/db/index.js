@@ -103,6 +103,12 @@ export async function initSchema() {
 
   const sql = readFileSync(SCHEMA_PATH, 'utf-8');
   db.exec(sql);
+  // 2026-11-09 补发支持:放宽"同一货件当前只能在一个发运单"的部分唯一索引。
+  // 补发场景(Ozon 侧同一货件先后/同时出现在两个发运单)允许本地同时记录,
+  // 归属由业务层默认保持旧单、确认补发后记录到新单;同发运单内仍由表级 UNIQUE 保证不重复。
+  db.exec(`DROP INDEX IF EXISTS uq_carriage_posting_ozon_current`);
+  db.exec(`DROP INDEX IF EXISTS uq_carriage_posting_manual_current`);
+  console.log('[db] migration: dropped partial unique indexes on op_carriage_posting (支持补发场景一货件多发运单)');
   // 采集域独立库(collect.db)初始化:建表 + 采集迁移(跨库回填需要主库连接)
   await initCollectSchema(db);
   await ensureMigrations();

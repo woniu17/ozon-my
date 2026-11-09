@@ -1282,12 +1282,8 @@ CREATE TABLE IF NOT EXISTS op_carriage_posting (
   updated_at        TEXT NOT NULL,
   UNIQUE(store_id, carriage_id, posting_number)
 );
--- 同一货件当前只能在一个 Ozon 发运单里(Ozon 同步行)
-CREATE UNIQUE INDEX IF NOT EXISTS uq_carriage_posting_ozon_current
-  ON op_carriage_posting(store_id, posting_number) WHERE removed_at IS NULL AND source = 'ozon';
--- 同一货件当前只能在一个跨店手动大包发运单里(本地混装行)
-CREATE UNIQUE INDEX IF NOT EXISTS uq_carriage_posting_manual_current
-  ON op_carriage_posting(store_id, posting_number) WHERE removed_at IS NULL AND source = 'manual';
+-- 2026-11-09 补发支持:同一货件允许记录在多个发运单(补发场景),不再建部分唯一索引;
+-- 同发运单内同一货件仍由 UNIQUE(store_id, carriage_id, posting_number) 保证唯一。
 -- 查发运单当前货件(按全局 carriage_id;跨店行 store_id 各不相同)
 CREATE INDEX IF NOT EXISTS idx_carriage_posting_active
   ON op_carriage_posting(carriage_id) WHERE removed_at IS NULL;

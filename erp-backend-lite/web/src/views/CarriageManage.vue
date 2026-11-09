@@ -18,6 +18,7 @@ import {
   getCarriage,
   getCarriagePostings,
   getPendingPostings,
+  reshipCarriagePosting,
   approveCarriage,
   cancelCarriage,
   getCarriageCourierContact,
@@ -491,6 +492,21 @@ async function loadCreatePostings() {
     // 默认全选:创建后仅当用户取消勾选时才调用 set-postings 覆盖
     createModal.selectedPostingNumbers = createModal.postings.map((p) => p.posting_number).filter(Boolean);
     createModal.allSelected = true;
+    // 2026-11-09:提示已在其他发运单活跃的货件(补发场景,创建后可能同时记录在多个发运单)
+    const existing = data?.existingCarriagePostings || [];
+    if (existing.length) {
+      const seen = new Set();
+      const listText = existing
+        .filter((c) => {
+          const k = `${c.postingNumber}|${c.carriageId}`;
+          if (seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        })
+        .map((c) => `${c.postingNumber}(发运单 #${c.carriageId})`)
+        .join('、');
+      show(`以下货件已在其他发运单,创建后可能同时记录在多个发运单(补发场景):${listText}`, 'warning');
+    }
   } catch (err) {
     show(err.message || String(err), 'error');
     createModal.postings = [];
@@ -704,6 +720,31 @@ async function loadPostings(row) {
     // Ozon 实测 limit 上限 100(超限报 invalid AssemblyCarriagePostingListRequest.Limit)
     const data = await getCarriagePostings(storeId.value, Number(row.id), { limit: 100 });
     detail.postings = data?.postings || [];
+    // 2026-11-09:跨发运单货件提示补发(已在其他发运单活跃,默认保持旧单归属)
+    const cross = data?.crossCarriagePostings || [];
+    if (cross.length) {
+      const listText = cross
+        .map((c) => `${c.postingNumber}(发运单 #${c.carriageId})`)
+        .join('、');
+      const ok = await confirmStore.ask({
+        title: '检测到已在其他发运单的货件',
+        message: `以下货件已在其他发运单中,当前发运单默认不显示:\n${listText}\n\n是否补发到当前发运单?(补发后两个发运单都会记录该货件)`,
+        confirmText: '补发',
+        cancelText: '不补发',
+      });
+      if (ok) {
+        for (const c of cross) {
+          try {
+            await reshipCarriagePosting(storeId.value, Number(row.id), c.postingNumber);
+          } catch (err) {
+            show(`补发 ${c.postingNumber} 失败:${err.message || String(err)}`, 'error');
+          }
+        }
+        // 补发后重新加载货件列表
+        const data2 = await getCarriagePostings(storeId.value, Number(row.id), { limit: 100 });
+        detail.postings = data2?.postings || [];
+      }
+    }
     // 2026-11-02:记录进入详情时的跨店货件快照(保存时 diff 本地增删)
     detail.manualSnapshot = detail.postings
       .filter((p) => p.source === 'manual')
