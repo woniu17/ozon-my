@@ -1815,18 +1815,14 @@ class OrderDetailActivity : ComponentActivity() {
                 }
             }
         }
-        // 二次确认(2026-10-19):商品总数量>1 时弹窗确认(与 H5/ScanShip 同口径)
+        // 二次确认(2026-11-09):所有入库操作统一弹窗确认(原仅商品数量>1时确认)
         val confirmAndDoShip = {
-            if (totalQty > 1) {
-                AlertDialog.Builder(this)
-                    .setTitle("入库确认")
-                    .setMessage("货件 ${p.postingNumber}\n该货件共 $totalQty 件商品,将向 Ozon 确认全部商品为一个货件(不拆分),之后可打印面单。")
-                    .setPositiveButton("入库") { _, _ -> doShip() }
-                    .setNegativeButton("取消", null)
-                    .show()
-            } else {
-                doShip()
-            }
+            AlertDialog.Builder(this)
+                .setTitle("入库确认")
+                .setMessage("货件 ${p.postingNumber}\n该货件共 $totalQty 件商品,将向 Ozon 确认全部商品为一个货件(不拆分),之后可打印面单。")
+                .setPositiveButton("入库") { _, _ -> doShip() }
+                .setNegativeButton("取消", null)
+                .show()
         }
         // 搁置订单二次确认(2026-10-23):已搁置订单先确认再操作(保持搁置标记)
         if (p.isIgnored) {
