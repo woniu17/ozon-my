@@ -2051,6 +2051,59 @@ function resolvePostingsForCarriage(storeId, carriageId, postings) {
   };
 }
 
+// 本地补发候选(2026-11-09):曾在当前发运单关联过、现在仍在本店其他发运单活跃的 ozon 货件。
+// Ozon 当前发运单列表若已不含该货件(被 Ozon 移出/列表变化),基于 Ozon 列表的候选会丢失;
+// 该函数从 op_carriage_posting 历史行找回,保证"曾在当前发运单补发过"的跨单货件仍可再次补发。
+// 限定"当前发运单存在历史关联行",避免把与本发运单无关的跨单货件(如 28 个)全部展示。
+function buildReshipCandidatesFromLocal(storeId, carriageId) {
+  if (!storeId || carriageId == null) return [];
+  const rows = db
+    .prepare(
+      `SELECT cp.store_id          AS storeId,
+              cp.carriage_id       AS carriageId,
+              cp.posting_number    AS postingNumber,
+              cp.ozon_order_id     AS ozonOrderId,
+              cp.package_id        AS packageId,
+              cp.delivery_method_id AS deliveryMethodId,
+              cp.added_at          AS addedAt,
+              ch.status            AS carriageStatus
+       FROM op_carriage_posting cp
+       LEFT JOIN op_carriage_history ch ON ch.carriage_id = cp.carriage_id
+       WHERE cp.store_id = ? AND cp.source = 'ozon' AND cp.removed_at IS NULL
+         AND cp.carriage_id != ?
+         AND NOT EXISTS (
+           SELECT 1 FROM op_carriage_posting me
+           WHERE me.store_id = cp.store_id AND me.posting_number = cp.posting_number
+             AND me.carriage_id = ? AND me.removed_at IS NULL
+         )
+         AND EXISTS (
+           SELECT 1 FROM op_carriage_posting hist
+           WHERE hist.store_id = cp.store_id AND hist.posting_number = cp.posting_number
+             AND hist.carriage_id = ?
+         )
+       ORDER BY cp.added_at DESC`
+    )
+    .all(String(storeId), Number(carriageId), Number(carriageId), Number(carriageId));
+  if (!rows.length) return [];
+  const stores = new Map((config.loadStores() || []).map((s) => [String(s.id), s]));
+  return rows.map((r) => ({
+    posting_number: r.postingNumber,
+    store_id: r.storeId,
+    store_name: stores.get(String(r.storeId))?.name || '',
+    source: 'ozon',
+    ozon_order_id: r.ozonOrderId,
+    package_id: r.packageId,
+    delivery_method_id: r.deliveryMethodId,
+    status: r.carriageStatus,
+    added_at: r.addedAt,
+    // 本地补发候选必然在其它发运单活跃(跨单候选),直接带补发标记
+    inOtherCarriage: true,
+    otherCarriageId: Number(r.carriageId),
+    otherCarriageStatus: r.carriageStatus || null,
+    products: [],
+  }));
+}
+
 // 为货件列表附加"已在其他发运单"标记(2026-11-09):
 // 货件在本店其他发运单仍有活跃 ozon 行时,附加 inOtherCarriage=true 与 otherCarriageId,
 // 供前端在详情列表/待发运弹窗中直接标记"已发货·在其他发运单",无需弹窗确认。
@@ -2997,10 +3050,12 @@ router.post('/admin/api/order-process/carriage/set-postings', async (req, res) =
 });
 
 // 可加入发运的货件候选(2026-10-30,增加货件用)
-// 2026-11-09 调整:本店候选 = Ozon 当前发运单货件列表中,被本地归属过滤排除的货件
-// (即已在其他发运单活跃的跨发运单货件)。Ozon 后台当前发运单待发运列表(如 17 个)中,
-// 详情已展示的(如 16 个)不再出现在候选,只保留需要确认归属/补发的货件(如 0164795750-0006-1)。
-// 数据来源:carriagePostingList(Ozon 当前发运单真实货件列表),本地富化状态/商品图。
+// 2026-11-09 调整:本店候选 = 跨发运单补发候选,数据源双来源合并去重:
+//   1. Ozon 当前发运单列表中,被本地归属过滤排除的货件(已在其他发运单活跃);
+//   2. 本地 op_carriage_posting 中"曾在当前发运单关联过、现仍在本店其他发运单活跃"的货件。
+// 来源 2 保证:即使 Ozon 侧已把货件移出当前发运单列表(如 125810729 从 17 个变 10 个),
+// 曾在当前发运单补发过的跨单货件(如 0164795750-0006-1)仍可在添加弹窗中找回补发。
+// 本地候选限定"当前发运单有历史关联行",避免把与本发运单无关的跨单货件全部展示。
 router.post('/admin/api/order-process/carriage/available-postings', async (req, res) => {
   try {
     const store = requireCarriageStore(req);
@@ -3024,11 +3079,28 @@ router.post('/admin/api/order-process/carriage/available-postings', async (req, 
     // 归属过滤:详情列表展示的货件 vs 跨发运单货件(已在其他发运单活跃)
     const resolved = resolvePostingsForCarriage(store.id, carriageId, rawPostings);
     const crossSet = new Set((resolved.crossCarriagePostings || []).map((c) => c.postingNumber));
-    // 候选 = Ozon 当前发运单列表中,归属过滤排除的货件(补发候选)
-    const candidates = rawPostings.filter((p) => crossSet.has(String(p?.posting_number)));
-    if (candidates.length) {
-      attachPostingProductImages(store.id, candidates);
-      attachPostingShipmentDates(store.id, candidates);
+    // 候选来源 1:Ozon 当前发运单列表中,归属过滤排除的货件(补发候选)
+    const candidates = [];
+    const seen = new Set();
+    const ozonCandidates = rawPostings.filter((p) => crossSet.has(String(p?.posting_number)));
+    if (ozonCandidates.length) {
+      attachPostingProductImages(store.id, ozonCandidates);
+      attachPostingShipmentDates(store.id, ozonCandidates);
+      for (const p of ozonCandidates) {
+        candidates.push(p);
+        seen.add(String(p?.posting_number));
+      }
+    }
+    // 候选来源 2:本地历史关联的跨单活跃货件(Ozon 列表已移除时仍可找回补发)
+    const localCandidates = buildReshipCandidatesFromLocal(store.id, carriageId);
+    if (localCandidates.length) {
+      hydrateLocalPostings(localCandidates);
+      for (const lp of localCandidates) {
+        if (!seen.has(String(lp.posting_number))) {
+          candidates.push(lp);
+          seen.add(String(lp.posting_number));
+        }
+      }
     }
     // 2026-11-07:标注"已随跨店大包发出"(Ozon 补登记识别,不排除)
     attachCrossStoreShippedForPostings(candidates, { currentStoreId: store.id });

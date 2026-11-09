@@ -995,7 +995,7 @@ async function onOpenCandidate() {
   }
 }
 
-// 本店货件候选(2026-11-09:仅跨发运单补发候选 = 当前发运单 Ozon 列表中、已记录在其他发运单的货件)
+// 本店货件候选(2026-11-09:跨发运单补发候选,双来源 = Ozon 当前列表中跨单货件 + 本地历史关联找回)
 async function loadSelfCandidates() {
   candidate.loading = true;
   try {
@@ -2149,7 +2149,7 @@ defineExpose({ refreshCurrent, listLoading });
       <div class="candidate-head">
         <span v-if="candidate.loading" class="field-hint">加载中…</span>
         <span v-else-if="candidate.tab === 'self'" class="field-hint">
-          已在本发运单 Ozon 列表中、但已记录在其他发运单(已发货)的本店货件(共 {{ candidate.postings.length }} 个),勾选即补发,将同时记录在当前发运单
+          已记录在其他发运单(已发货)、可在本发运单补发的本店货件(共 {{ candidate.postings.length }} 个),勾选即补发,将同时记录在当前发运单
         </span>
         <span v-else class="field-hint">
           已选 {{ candidate.sourceStoreIds.length }}/{{ candidateStores.length }} 家店铺的待发运货件(共 {{ candidate.postings.length }} 个),已排除当前发运中货件
