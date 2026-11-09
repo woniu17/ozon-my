@@ -995,7 +995,7 @@ async function onOpenCandidate() {
   }
 }
 
-// 本店货件候选(Ozon available-postings)
+// 本店货件候选(2026-11-09:仅跨发运单补发候选 = 当前发运单 Ozon 列表中、已记录在其他发运单的货件)
 async function loadSelfCandidates() {
   candidate.loading = true;
   try {
@@ -1003,7 +1003,7 @@ async function loadSelfCandidates() {
       deliveryMethodId: detail.carriage?.delivery_method_id || undefined,
     });
     candidate.postings = data?.postings || [];
-    if (!candidate.postings.length) show('没有可加入的「已准备发运」货件', 'info');
+    if (!candidate.postings.length) show('没有需补发的跨发运单货件', 'info');
   } catch (err) {
     show(err.message || String(err), 'error');
   } finally {
@@ -2149,7 +2149,7 @@ defineExpose({ refreshCurrent, listLoading });
       <div class="candidate-head">
         <span v-if="candidate.loading" class="field-hint">加载中…</span>
         <span v-else-if="candidate.tab === 'self'" class="field-hint">
-          已准备发运、不在当前发运中的本店货件(共 {{ candidate.postings.length }} 个),勾选后加入;标记「已发货」的货件勾选即补发
+          已在本发运单 Ozon 列表中、但已记录在其他发运单(已发货)的本店货件(共 {{ candidate.postings.length }} 个),勾选即补发,将同时记录在当前发运单
         </span>
         <span v-else class="field-hint">
           已选 {{ candidate.sourceStoreIds.length }}/{{ candidateStores.length }} 家店铺的待发运货件(共 {{ candidate.postings.length }} 个),已排除当前发运中货件
@@ -2168,7 +2168,7 @@ defineExpose({ refreshCurrent, listLoading });
         </button>
       </div>
       <div v-if="candidate.loading && !candidate.postings.length" class="list-empty">加载中…</div>
-      <div v-else-if="!candidate.postings.length" class="list-empty">{{ candidate.tab === 'self' ? '没有可加入的「已准备发运」货件' : '没有符合筛选条件的待发运货件' }}</div>
+      <div v-else-if="!candidate.postings.length" class="list-empty">{{ candidate.tab === 'self' ? '没有需补发的跨发运单货件' : '没有符合筛选条件的待发运货件' }}</div>
       <table v-else class="posting-table candidate-table">
         <thead>
           <tr>
