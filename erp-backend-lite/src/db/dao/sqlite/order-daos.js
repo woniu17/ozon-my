@@ -415,40 +415,32 @@ function reconcileSplitForPosting(storeId, postingNumber) {
 }
 
 /**
- * 将 k 件缺口均匀分配到母件各采购行(每行上限为其数量)。
- * 2026-11-09:从"FIFO 只取最早采购行"改为均匀分配——
- * 用户反馈拆单子件只继承一个采购订单(如 19478301-2588-23 缺 3317174292155009378),
- * 均匀分配保证子件关联到母件该 SKU 的【所有】采购单(每行尽量分到)。
- * 返回与 quantities 等长的数组,每项为该行应迁移件数。
+ * 按母件:子件数量比例(M:C)计算每个采购行应分配给子件的目标数量。
+ * 2026-11-09(二改):用户明确"每个采购单的金额按母件:子件数量比例分配"(如 3:2),
+ * 取代之前试行的"均匀分配"(母件4:4/子件1:1不符合 3:2)。
+ * 总目标 = round(各行合计 × C/(M+C)),各行按最大余数法取整,保证目标总和一致。
+ * rows: [{ totalQty: 母件+子件在该采购单的合计数量, childQty: 子件已有 }]
+ * 返回与 rows 等长的目标子件数量数组。
  */
-function distributeEvenly(k, quantities) {
-  const n = quantities.length;
-  const takes = new Array(n).fill(0);
-  if (!n || k <= 0) return takes;
-  let remaining = k;
-  // 第一轮:均分 base,受各行数量上限约束
-  const base = Math.floor(remaining / n);
-  for (let i = 0; i < n; i++) {
-    const t = Math.min(base, quantities[i]);
-    takes[i] = t;
-    remaining -= t;
+function proportionalChildTargets(motherQty, childQty, rows) {
+  const n = rows.length;
+  const targets = new Array(n).fill(0);
+  if (!n || motherQty + childQty <= 0) return targets;
+  const ratio = childQty / (motherQty + childQty);
+  const sumTotal = rows.reduce((s, r) => s + r.totalQty, 0);
+  const targetTotal = Math.round(sumTotal * ratio);
+  if (targetTotal <= 0) return targets;
+  const exact = rows.map((r) => r.totalQty * ratio);
+  for (let i = 0; i < n; i++) targets[i] = Math.floor(exact[i]);
+  let remain = targetTotal - targets.reduce((a, b) => a + b, 0);
+  const order = exact
+    .map((v, i) => ({ frac: v - Math.floor(v), idx: i }))
+    .sort((a, b) => b.frac - a.frac || a.idx - b.idx);
+  for (let j = 0; j < order.length && remain > 0; j++) {
+    targets[order[j].idx] += 1;
+    remain -= 1;
   }
-  // 第二轮:循环补充分配(每行 +1,直到达到各自上限),保证覆盖所有行
-  let guard = 0;
-  while (remaining > 0 && guard < 1000) {
-    let progressed = false;
-    for (let i = 0; i < n; i++) {
-      if (remaining <= 0) break;
-      if (takes[i] < quantities[i]) {
-        takes[i] += 1;
-        remaining -= 1;
-        progressed = true;
-      }
-    }
-    if (!progressed) break;
-    guard += 1;
-  }
-  return takes;
+  return targets;
 }
 
 /** 以母件为单位执行迁移(核心算法,内部事务,幂等) */
@@ -543,24 +535,32 @@ function reconcileMother(storeId, mother) {
         const mItem = motherItemByKey.get(`${cit.sku}\u0000${cit.offer_id}`);
         if (!mItem) continue;
         const mLinks = linksByItem.get(mItem.id) || [];
-        const movable = mLinks.reduce((s, l) => s + l.quantity, 0) - mItem.quantity;
-        if (movable <= 0) continue;
-        // 子件已关联数量:单一 SKU 子件含包裹级(全部关联);多 SKU 子件仅行级
-        const cLinkedRow = db.prepare(
-          `SELECT COALESCE(SUM(quantity), 0) AS q FROM op_purchase_link
-           WHERE package_id = ? AND (ozon_order_item_id = ? OR (ozon_order_item_id IS NULL AND ? = 1))`
-        ).get(childPkg.id, cit.id, childItems.length === 1 ? 1 : 0);
-        const deficit = cit.quantity - cLinkedRow.q;
-        const k = Math.min(movable, deficit);
-        if (k <= 0) continue;
+        if (!mLinks.length) continue;
 
-        // 均匀分配到母件全部采购行(非 FIFO):子件继承母件该 SKU 的所有采购单
-        const takes = distributeEvenly(k, mLinks.map((l) => l.quantity));
-        let remain = k;
-        for (let li = 0; li < mLinks.length && remain > 0; li++) {
-          const ml = mLinks[li];
-          if (ml.quantity <= 0) continue;
-          const take = Math.min(takes[li], ml.quantity, remain);
+        // 子件已关联(按采购单分组;单一 SKU 子件含包裹级,多 SKU 子件仅行级)
+        const childRows = db.prepare(
+          `SELECT purchase_order_id, COALESCE(SUM(quantity), 0) AS qty
+           FROM op_purchase_link
+           WHERE package_id = ? AND (ozon_order_item_id = ? OR (ozon_order_item_id IS NULL AND ? = 1))
+           GROUP BY purchase_order_id`
+        ).all(childPkg.id, cit.id, childItems.length === 1 ? 1 : 0);
+        const childQtyByPo = new Map(childRows.map((r) => [r.purchase_order_id, r.qty]));
+
+        // 按母件:子件数量比例(M:C)分配:汇总母件+子件在每个采购单的合计数量,
+        // 用最大余数法算出子件在每个采购单的目标数量,再迁移差值(幂等)。
+        const rows = mLinks.map((ml) => ({
+          totalQty: ml.quantity + (childQtyByPo.get(ml.purchase_order_id) || 0),
+          childQty: childQtyByPo.get(ml.purchase_order_id) || 0,
+          ml,
+        }));
+        const targets = proportionalChildTargets(mItem.quantity, cit.quantity, rows);
+
+        for (let li = 0; li < rows.length; li++) {
+          const ml = rows[li].ml;
+          if (!ml || ml.quantity <= 0) continue;
+          const delta = targets[li] - rows[li].childQty;
+          if (delta <= 0) continue;
+          const take = Math.min(delta, ml.quantity);
           if (take <= 0) continue;
           const amount =
             take === ml.quantity
@@ -590,7 +590,6 @@ function reconcileMother(storeId, mother) {
           }
           ml.quantity -= take;
           ml.allocated_amount = Math.round((ml.allocated_amount - amount) * 100) / 100;
-          remain -= take;
           audit.moves.push({
             child: child.posting_number, sku: cit.sku,
             purchaseOrderId: ml.purchase_order_id, quantity: take, amount,
