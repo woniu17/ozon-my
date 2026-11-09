@@ -2912,6 +2912,9 @@ router.post('/admin/api/order-process/carriage/posting-list', async (req, res) =
 
 // 补发货件(2026-11-09):将已在其他发运单活跃的货件显式记录到当前发运单(补发场景)。
 // 前提:货件在本店其他发运单有活跃 ozon 关联(由归属过滤识别);幂等,不重复计数。
+// 2026-11-09:补发必须真正写入 Ozon 发运单——先取当前发运单完整货件列表,
+// 目标货件不在其中时追加后调 set-postings 全量覆盖(Ozon 实测支持一货件同时在多个发运单)。
+// 仅写本地表会导致 Ozon 后台与详情列表(基于 Ozon 列表)均不出现该货件。
 router.post('/admin/api/order-process/carriage/posting/reship', async (req, res) => {
   try {
     const store = requireCarriageStore(req);
@@ -2930,6 +2933,24 @@ router.post('/admin/api/order-process/carriage/posting/reship', async (req, res)
     if (!other) {
       return res.status(400).json({ ok: false, message: '该货件未在其它发运单活跃,无需补发' });
     }
+    let currentNumbers = [];
+    let cursor = '';
+    let guard = 0;
+    do {
+      const page = await carriagePostingList(store, carriageId, { cursor, limit: 100 });
+      currentNumbers.push(...((page?.postings || []).map((p) => p?.posting_number).filter(Boolean)));
+      cursor = page?.cursor || '';
+      guard += 1;
+      if (guard > 50) break; // 防死循环(最多 5000 条)
+    } while (cursor);
+    const alreadyIn = currentNumbers.some((n) => String(n) === String(postingNumber));
+    if (!alreadyIn) {
+      const setRes = await carriageSetPostings(store, carriageId, [...currentNumbers, String(postingNumber)]);
+      const item = (setRes?.result || []).find((x) => String(x?.posting_number) === String(postingNumber));
+      if (item && item.result === false) {
+        throw new Error(`Ozon 拒绝将货件加入发运单:${item.error || '未知错误'}`);
+      }
+    }
     upsertCarriagePostingRow({
       storeId: store.id,
       carriageId,
@@ -2938,10 +2959,10 @@ router.post('/admin/api/order-process/carriage/posting/reship', async (req, res)
       forceReship: true,
     });
     logger.info(
-      { storeId: store.id, carriageId, postingNumber, fromCarriageId: Number(other.carriageId) },
+      { storeId: store.id, carriageId, postingNumber, fromCarriageId: Number(other.carriageId), ozonAdded: !alreadyIn },
       '[order-process] 补发货件到当前发运单'
     );
-    res.json(ok({ carriageId, postingNumber, fromCarriageId: Number(other.carriageId) }));
+    res.json(ok({ carriageId, postingNumber, fromCarriageId: Number(other.carriageId), ozonAdded: !alreadyIn }));
   } catch (e) { carriageHandleError(e, req, res, '补发货件'); }
 });
 
