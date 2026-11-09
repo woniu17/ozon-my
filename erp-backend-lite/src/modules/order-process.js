@@ -2041,7 +2041,8 @@ function resolvePostingsForCarriage(storeId, carriageId, postings) {
              AND me.carriage_id = ? AND me.removed_at IS NULL
          )`
     )
-    .all(String(storeId), Number(carriageId), Number(carriageId), ...numbers);
+    // 注意参数顺序:SQL 中 IN(...) 位于 NOT EXISTS 之前,因此 numbers 先于 me.carriage_id
+    .all(String(storeId), Number(carriageId), ...numbers, Number(carriageId));
   if (!rows.length) return { postings: list, crossCarriagePostings: [] };
   const excluded = new Map(rows.map((r) => [r.postingNumber, r.carriageId]));
   return {
@@ -2797,8 +2798,13 @@ router.post('/admin/api/order-process/carriage/posting-list', async (req, res) =
       attachPostingProductImages(store.id, r.postings);
       attachPostingShipmentDates(store.id, r.postings);
     }
+    // 2026-11-09:保存 Ozon 原始列表(含跨发运单货件)——归属过滤只影响"展示",
+    // 本地关联刷新必须基于原始列表,否则补发行(已显式记录在当前发运单)会被
+    // markAbsentPostingsRemoved 当作"不在列表中"误删,导致补发后详情仍不展示。
+    const rawPostings = r?.postings || [];
     // 2026-11-09:归属过滤——已在其他发运单活跃且当前无记录的货件,默认保持旧单归属,
-    // 从本发运单展示/同步中排除;信息随响应返回,前端可提示补发。
+    // 从本发运单展示中排除;信息随响应返回,前端可提示补发。
+    // 已补发(当前发运单存在活跃行)的货件不再被排除,会正常出现在详情列表。
     if (r?.postings) {
       const resolved = resolvePostingsForCarriage(store.id, carriageId, r.postings);
       r.postings = resolved.postings;
@@ -2812,7 +2818,7 @@ router.post('/admin/api/order-process/carriage/posting-list', async (req, res) =
     // 2026-11-09:本地关联刷新是次要操作,失败只记日志,不阻塞货件列表返回
     if (r?.postings) {
       try {
-        syncCarriagePostings(store.id, carriageId, r.postings, {
+        syncCarriagePostings(store.id, carriageId, rawPostings, {
           deliveryMethodId: req.body?.deliveryMethodId,
           departureDate: req.body?.departureDate,
         });
