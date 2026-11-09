@@ -414,6 +414,43 @@ function reconcileSplitForPosting(storeId, postingNumber) {
   }
 }
 
+/**
+ * 将 k 件缺口均匀分配到母件各采购行(每行上限为其数量)。
+ * 2026-11-09:从"FIFO 只取最早采购行"改为均匀分配——
+ * 用户反馈拆单子件只继承一个采购订单(如 19478301-2588-23 缺 3317174292155009378),
+ * 均匀分配保证子件关联到母件该 SKU 的【所有】采购单(每行尽量分到)。
+ * 返回与 quantities 等长的数组,每项为该行应迁移件数。
+ */
+function distributeEvenly(k, quantities) {
+  const n = quantities.length;
+  const takes = new Array(n).fill(0);
+  if (!n || k <= 0) return takes;
+  let remaining = k;
+  // 第一轮:均分 base,受各行数量上限约束
+  const base = Math.floor(remaining / n);
+  for (let i = 0; i < n; i++) {
+    const t = Math.min(base, quantities[i]);
+    takes[i] = t;
+    remaining -= t;
+  }
+  // 第二轮:循环补充分配(每行 +1,直到达到各自上限),保证覆盖所有行
+  let guard = 0;
+  while (remaining > 0 && guard < 1000) {
+    let progressed = false;
+    for (let i = 0; i < n; i++) {
+      if (remaining <= 0) break;
+      if (takes[i] < quantities[i]) {
+        takes[i] += 1;
+        remaining -= 1;
+        progressed = true;
+      }
+    }
+    if (!progressed) break;
+    guard += 1;
+  }
+  return takes;
+}
+
 /** 以母件为单位执行迁移(核心算法,内部事务,幂等) */
 function reconcileMother(storeId, mother) {
   const pkg = db.prepare(`SELECT id, is_ignored FROM op_package WHERE ozon_order_id = ?`).get(mother.id);
@@ -517,11 +554,14 @@ function reconcileMother(storeId, mother) {
         const k = Math.min(movable, deficit);
         if (k <= 0) continue;
 
-        // FIFO 从母件关联行逐行拆
+        // 均匀分配到母件全部采购行(非 FIFO):子件继承母件该 SKU 的所有采购单
+        const takes = distributeEvenly(k, mLinks.map((l) => l.quantity));
         let remain = k;
-        for (const ml of mLinks) {
-          if (remain <= 0 || ml.quantity <= 0) break;
-          const take = Math.min(remain, ml.quantity);
+        for (let li = 0; li < mLinks.length && remain > 0; li++) {
+          const ml = mLinks[li];
+          if (ml.quantity <= 0) continue;
+          const take = Math.min(takes[li], ml.quantity, remain);
+          if (take <= 0) continue;
           const amount =
             take === ml.quantity
               ? ml.allocated_amount
