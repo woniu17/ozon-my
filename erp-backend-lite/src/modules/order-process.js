@@ -50,6 +50,12 @@ import {
   carriageCourierContactGet,
   carriagePostingList,
 } from '../services/ozon-opi.js';
+import {
+  getOrFetchUnfulfilled,
+  getOrFetchCarriagePostings,
+  invalidateCarriageCandidateCaches,
+  warmUnfulfilledCache,
+} from '../services/carriage-candidate-cache.js';
 import { upsertCarriageHistory, updateCarriageHistoryJson } from '../services/carriage-history-sync.js';
 import { ApiError, ErrorCode } from '../utils/error-codes.js';
 import { notifyPostingEvent } from '../services/webhook/feishu-notify.js';
@@ -2857,6 +2863,11 @@ router.post('/admin/api/order-process/carriage/posting-list', async (req, res) =
         postingsJson: JSON.stringify(r.postings),
       });
     }
+    // 2026-11-10:后台预热本配送方式未妥投池,用户打开"添加货件"弹窗时可命中缓存
+    // (Ozon /v4/posting/fbs/unfulfilled/list 响应 8~20s,提前拉取避免首次等待)
+    warmUnfulfilledCache(store, req.body?.deliveryMethodId, () =>
+      fetchUnfulfilledAwaitingDeliver(store, req.body?.deliveryMethodId)
+    );
     res.json(ok(r));
   } catch (e) { carriageHandleError(e, req, res, '获取发运货件'); }
 });
@@ -2887,16 +2898,9 @@ router.post('/admin/api/order-process/carriage/posting/reship', async (req, res)
       )
       .get(store.id, postingNumber, carriageId);
     const fromCarriageId = fromRow ? Number(fromRow.carriageId) : null;
-    let currentNumbers = [];
-    let cursor = '';
-    let guard = 0;
-    do {
-      const page = await carriagePostingList(store, carriageId, { cursor, limit: 100 });
-      currentNumbers.push(...((page?.postings || []).map((p) => p?.posting_number).filter(Boolean)));
-      cursor = page?.cursor || '';
-      guard += 1;
-      if (guard > 50) break; // 防死循环(最多 5000 条)
-    } while (cursor);
+    const currentNumbers = await getOrFetchCarriagePostings(store, carriageId, () =>
+      fetchCarriagePostingNumbers(store, carriageId)
+    );
     const alreadyIn = currentNumbers.some((n) => String(n) === String(postingNumber));
     if (!alreadyIn) {
       const setRes = await carriageSetPostings(store, carriageId, [...currentNumbers, String(postingNumber)]);
@@ -2916,6 +2920,8 @@ router.post('/admin/api/order-process/carriage/posting/reship', async (req, res)
       { storeId: store.id, carriageId, postingNumber, fromCarriageId, ozonAdded: !alreadyIn },
       '[order-process] 补发货件到当前发运单'
     );
+    // 补发改变了当前发运单货件组成(ozonAdded)与本地关联,失效候选缓存,下次打开弹窗重新拉取
+    invalidateCarriageCandidateCaches(store.id, carriageId);
     res.json(ok({ carriageId, postingNumber, fromCarriageId, ozonAdded: !alreadyIn }));
   } catch (e) { carriageHandleError(e, req, res, '补发货件'); }
 });
@@ -2931,26 +2937,9 @@ router.post('/admin/api/order-process/carriage/pending-postings', async (req, re
     if (deliveryMethodId == null || deliveryMethodId === '') {
       throw new ApiError(ErrorCode.VALIDATION_ERROR, 'deliveryMethodId 必填');
     }
-    const postings = [];
-    let cursor = '';
-    let guard = 0;
-    do {
-      const page = await postingFbsUnfulfilledList(store, {
-        cutoffFrom: '2000-01-01T00:00:00.000Z',
-        cutoffTo: '2999-12-31T23:59:59.999Z',
-        cursor,
-        limit: 100,
-        deliveryMethodId,
-        withData: {},
-      });
-      const list = page?.result?.postings || page?.postings || [];
-      for (const p of list) {
-        if (p?.status === 'awaiting_deliver') postings.push(p);
-      }
-      cursor = page?.result?.cursor || page?.cursor || '';
-      guard += 1;
-      if (guard > 50) break; // 防死循环(最多 5000 条)
-    } while (cursor);
+    const postings = await getOrFetchUnfulfilled(store, deliveryMethodId, () =>
+      fetchUnfulfilledAwaitingDeliver(store, deliveryMethodId)
+    );
     if (postings.length) {
       attachPostingProductImages(store.id, postings);
       attachPostingShipmentDates(store.id, postings);
@@ -3019,10 +3008,55 @@ router.post('/admin/api/order-process/carriage/set-postings', async (req, res) =
     // 2026-11-02:全量覆盖后异步刷新本地货件-发运单关联
     if (req.body?.carriageId) {
       void refreshCarriagePostingLink(store, req.body.carriageId);
+      // 2026-11-10:加入货件改变了当前发运单组成,失效候选缓存,下次打开弹窗重新拉取
+      invalidateCarriageCandidateCaches(store.id, Number(req.body.carriageId));
     }
     res.json(ok(r));
   } catch (e) { carriageHandleError(e, req, res, '设置发运货件'); }
 });
+
+// ── 添加货件候选 · Ozon 拉取辅助(2026-11-10 缓存化) ──────────
+// Ozon /v4/posting/fbs/unfulfilled/list 响应实测 8~20 秒,每次打开弹窗都拉太慢。
+// 拉取结果交给 carriage-candidate-cache 缓存(2 分钟),本地富化仍实时执行。
+// 这两个函数被 available-postings / pending-postings / 详情页预热共用。
+
+async function fetchUnfulfilledAwaitingDeliver(store, deliveryMethodId) {
+  const postings = [];
+  let cursor = '';
+  let guard = 0;
+  do {
+    const page = await postingFbsUnfulfilledList(store, {
+      cutoffFrom: '2000-01-01T00:00:00.000Z',
+      cutoffTo: '2999-12-31T23:59:59.999Z',
+      cursor,
+      limit: 100,
+      deliveryMethodId,
+      withData: {},
+    });
+    const list = page?.result?.postings || page?.postings || [];
+    for (const p of list) {
+      if (p?.status === 'awaiting_deliver') postings.push(p);
+    }
+    cursor = page?.result?.cursor || page?.cursor || '';
+    guard += 1;
+    if (guard > 50) break; // 防死循环(最多 5000 条)
+  } while (cursor);
+  return postings;
+}
+
+async function fetchCarriagePostingNumbers(store, carriageId) {
+  const numbers = [];
+  let cursor = '';
+  let guard = 0;
+  do {
+    const page = await carriagePostingList(store, Number(carriageId), { cursor, limit: 100 });
+    numbers.push(...((page?.postings || []).map((p) => p?.posting_number).filter(Boolean)));
+    cursor = page?.cursor || '';
+    guard += 1;
+    if (guard > 50) break; // 防死循环(最多 5000 条)
+  } while (cursor);
+  return numbers;
+}
 
 // 可加入发运的货件候选(2026-10-30,增加货件用)
 // 2026-11-09 调整为「未妥投池单来源」:
@@ -3042,26 +3076,10 @@ router.post('/admin/api/order-process/carriage/available-postings', async (req, 
       throw new ApiError(ErrorCode.VALIDATION_ERROR, 'deliveryMethodId 必填');
     }
     // 1) 拉取该配送方式下所有 awaiting_deliver 货件(与创建发运弹窗同源)
-    const unfulfilled = [];
-    let cursor = '';
-    let guard = 0;
-    do {
-      const page = await postingFbsUnfulfilledList(store, {
-        cutoffFrom: '2000-01-01T00:00:00.000Z',
-        cutoffTo: '2999-12-31T23:59:59.999Z',
-        cursor,
-        limit: 100,
-        deliveryMethodId,
-        withData: {},
-      });
-      const list = page?.result?.postings || page?.postings || [];
-      for (const p of list) {
-        if (p?.status === 'awaiting_deliver') unfulfilled.push(p);
-      }
-      cursor = page?.result?.cursor || page?.cursor || '';
-      guard += 1;
-      if (guard > 50) break; // 防死循环(最多 5000 条)
-    } while (cursor);
+    //    Ozon 接口响应慢(实测 8~20s),结果缓存 2 分钟;本地富化每次实时做
+    const unfulfilled = await getOrFetchUnfulfilled(store, deliveryMethodId, () =>
+      fetchUnfulfilledAwaitingDeliver(store, deliveryMethodId)
+    );
     if (!unfulfilled.length) {
       return res.json(ok({ postings: [], count: 0, existingCarriagePostings: [] }));
     }
@@ -3085,16 +3103,9 @@ router.post('/admin/api/order-process/carriage/available-postings', async (req, 
     }
     // 3) 排除已在当前发运单的货件(以 Ozon 发运单真实列表为准,2026-11-10)
     //    未妥投池可能包含刚加入本发运单但状态尚未更新的货件,本店候选只显示可加入的
-    const currentNumbers = [];
-    let currentCursor = '';
-    let currentGuard = 0;
-    do {
-      const page = await carriagePostingList(store, Number(carriageId), { cursor: currentCursor, limit: 100 });
-      currentNumbers.push(...((page?.postings || []).map((p) => p?.posting_number).filter(Boolean)));
-      currentCursor = page?.cursor || '';
-      currentGuard += 1;
-      if (currentGuard > 50) break; // 防死循环(最多 5000 条)
-    } while (currentCursor);
+    const currentNumbers = await getOrFetchCarriagePostings(store, carriageId, () =>
+      fetchCarriagePostingNumbers(store, carriageId)
+    );
     const inCurrentCarriage = new Set(currentNumbers.map((n) => String(n)));
     const candidates = unfulfilled.filter((p) => !inCurrentCarriage.has(String(p?.posting_number)));
     if (!candidates.length) {

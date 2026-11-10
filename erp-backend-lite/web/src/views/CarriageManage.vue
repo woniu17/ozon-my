@@ -1758,14 +1758,16 @@ defineExpose({ refreshCurrent, listLoading });
                 <td>
                   <div v-if="(p.products || []).length" class="posting-products">
                     <div v-for="it in p.products" :key="it.sku || it.offer_id || it.name" class="posting-product">
-                      <img
-                        v-if="it.image_url"
-                        :src="it.image_url"
-                        referrerpolicy="no-referrer"
-                        loading="lazy"
-                        class="posting-product-img"
-                        alt=""
-                      />
+                      <div v-if="it.image_url" class="img-hover-wrap">
+                        <img
+                          :src="it.image_url"
+                          referrerpolicy="no-referrer"
+                          loading="lazy"
+                          class="posting-product-img"
+                          alt=""
+                        />
+                        <img class="img-preview" :src="it.image_url" referrerpolicy="no-referrer" loading="lazy" alt="" />
+                      </div>
                       <div class="posting-product-info">
                         <span class="posting-product-name" :title="it.name || it.product_name || it.offer_id || it.sku">
   {{ shortProductName(it.name || it.product_name || it.offer_id || it.sku) || '—' }}
@@ -1848,14 +1850,16 @@ defineExpose({ refreshCurrent, listLoading });
             <td>
               <div v-if="(p.products || []).length" class="posting-products">
                 <div v-for="it in p.products" :key="it.sku || it.offer_id || it.name" class="posting-product">
-                  <img
-                    v-if="it.image_url"
-                    :src="it.image_url"
-                    referrerpolicy="no-referrer"
-                    loading="lazy"
-                    class="posting-product-img"
-                    alt=""
-                  />
+                  <div v-if="it.image_url" class="img-hover-wrap">
+                    <img
+                      :src="it.image_url"
+                      referrerpolicy="no-referrer"
+                      loading="lazy"
+                      class="posting-product-img"
+                      alt=""
+                    />
+                    <img class="img-preview" :src="it.image_url" referrerpolicy="no-referrer" loading="lazy" alt="" />
+                  </div>
                   <div class="posting-product-info">
                     <span class="posting-product-name" :title="it.name || it.product_name || it.offer_id || it.sku">
   {{ shortProductName(it.name || it.product_name || it.offer_id || it.sku) || '—' }}
@@ -2049,14 +2053,16 @@ defineExpose({ refreshCurrent, listLoading });
                 <td>
                   <div v-if="(p.products || []).length" class="posting-products">
                     <div v-for="it in p.products" :key="it.sku || it.offer_id || it.name" class="posting-product">
-                      <img
-                        v-if="it.image_url"
-                        :src="it.image_url"
-                        referrerpolicy="no-referrer"
-                        loading="lazy"
-                        class="posting-product-img"
-                        alt=""
-                      />
+                      <div v-if="it.image_url" class="img-hover-wrap">
+                        <img
+                          :src="it.image_url"
+                          referrerpolicy="no-referrer"
+                          loading="lazy"
+                          class="posting-product-img"
+                          alt=""
+                        />
+                        <img class="img-preview" :src="it.image_url" referrerpolicy="no-referrer" loading="lazy" alt="" />
+                      </div>
                       <div class="posting-product-info">
                         <span class="posting-product-name" :title="it.name || it.product_name || it.offer_id || it.sku">
   {{ shortProductName(it.name || it.product_name || it.offer_id || it.sku) || '—' }}
@@ -2200,14 +2206,16 @@ defineExpose({ refreshCurrent, listLoading });
             <td>
               <div v-if="(p.products || []).length" class="posting-products">
                 <div v-for="it in p.products" :key="it.sku || it.offer_id || it.name" class="posting-product">
-                  <img
-                    v-if="it.image_url"
-                    :src="it.image_url"
-                    referrerpolicy="no-referrer"
-                    loading="lazy"
-                    class="posting-product-img"
-                    alt=""
-                  />
+                  <div v-if="it.image_url" class="img-hover-wrap">
+                    <img
+                      :src="it.image_url"
+                      referrerpolicy="no-referrer"
+                      loading="lazy"
+                      class="posting-product-img"
+                      alt=""
+                    />
+                    <img class="img-preview" :src="it.image_url" referrerpolicy="no-referrer" loading="lazy" alt="" />
+                  </div>
                   <div class="posting-product-info">
                     <span class="posting-product-name" :title="it.name || it.product_name || it.offer_id || it.sku">
   {{ shortProductName(it.name || it.product_name || it.offer_id || it.sku) || '—' }}
@@ -2724,12 +2732,12 @@ defineExpose({ refreshCurrent, listLoading });
   color: var(--text);
 }
 
-/* ── 货件商品图片(2026-10-30) ── */
+/* ── 货件商品图片(2026-10-30;2026-11-10 改为 50x50 + hover 大图) ── */
 .posting-products {
   display: flex;
   flex-direction: column;
   gap: 5px;
-  min-width: 240px;
+  min-width: 260px;
 }
 .posting-product {
   display: flex;
@@ -2738,13 +2746,38 @@ defineExpose({ refreshCurrent, listLoading });
   min-width: 0;
 }
 .posting-product-img {
-  width: 34px;
-  height: 34px;
+  width: 50px;
+  height: 50px;
   border-radius: 6px;
   object-fit: cover;
   border: 1px solid var(--border);
   flex-shrink: 0;
   background: #f5f5f5;
+  display: block;
+}
+/* 图片悬浮大图预览(货件商品图 50px;hover 放大 280px,2026-11-10 参考订单处理列表) */
+.img-hover-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+.img-preview {
+  display: none;
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+  width: 280px;
+  height: 280px;
+  object-fit: contain;
+  background: #fff;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+  z-index: 30;
+  pointer-events: none;
+}
+.img-hover-wrap:hover .img-preview {
+  display: block;
 }
 .posting-product-info {
   flex: 1;
