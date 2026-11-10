@@ -995,7 +995,7 @@ async function onOpenCandidate() {
   }
 }
 
-// 本店货件候选(2026-11-09:未妥投池单来源 = awaiting_deliver 中曾在本店其他发运单记录过的货件)
+// 本店货件候选(2026-11-10:该配送方式下全部 awaiting_deliver 货件;曾在本店其他发运单记录过仅作标记)
 async function loadSelfCandidates() {
   candidate.loading = true;
   try {
@@ -1003,7 +1003,7 @@ async function loadSelfCandidates() {
       deliveryMethodId: detail.carriage?.delivery_method_id || undefined,
     });
     candidate.postings = data?.postings || [];
-    if (!candidate.postings.length) show('没有曾在本店其他发运单记录过的待发运货件', 'info');
+    if (!candidate.postings.length) show('没有待发运货件', 'info');
   } catch (err) {
     show(err.message || String(err), 'error');
   } finally {
@@ -2149,7 +2149,7 @@ defineExpose({ refreshCurrent, listLoading });
       <div class="candidate-head">
         <span v-if="candidate.loading" class="field-hint">加载中…</span>
         <span v-else-if="candidate.tab === 'self'" class="field-hint">
-          曾在本店其他发运单记录过、现回到可发运池的货件(共 {{ candidate.postings.length }} 个),勾选即补发到当前发运单
+          本配送方式下所有待发运货件(共 {{ candidate.postings.length }} 个),勾选即加入当前发运单;曾记录于其他发运单的会标注
         </span>
         <span v-else class="field-hint">
           已选 {{ candidate.sourceStoreIds.length }}/{{ candidateStores.length }} 家店铺的待发运货件(共 {{ candidate.postings.length }} 个),已排除当前发运中货件
@@ -2168,7 +2168,7 @@ defineExpose({ refreshCurrent, listLoading });
         </button>
       </div>
       <div v-if="candidate.loading && !candidate.postings.length" class="list-empty">加载中…</div>
-      <div v-else-if="!candidate.postings.length" class="list-empty">{{ candidate.tab === 'self' ? '没有曾在本店其他发运单记录过的待发运货件' : '没有符合筛选条件的待发运货件' }}</div>
+      <div v-else-if="!candidate.postings.length" class="list-empty">{{ candidate.tab === 'self' ? '没有待发运货件' : '没有符合筛选条件的待发运货件' }}</div>
       <table v-else class="posting-table candidate-table">
         <thead>
           <tr>
@@ -2190,7 +2190,7 @@ defineExpose({ refreshCurrent, listLoading });
               <span
                 v-if="p.inOtherCarriage"
                 class="reship-tag"
-                :title="`该货件曾记录在发运单 #${p.otherCarriageId},勾选即补发到当前发运单`"
+                :title="`该货件曾记录在发运单 #${p.otherCarriageId},勾选即加入当前发运单`"
               >曾记录·在 #{{ p.otherCarriageId }}</span>
             </td>
             <td v-if="candidate.tab === 'cross' || candidate.tab === 'history'">

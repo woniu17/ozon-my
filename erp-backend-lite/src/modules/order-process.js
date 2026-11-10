@@ -2051,8 +2051,9 @@ function resolvePostingsForCarriage(storeId, carriageId, postings) {
   };
 }
 
-// 2026-11-09:本地补发候选 buildReshipCandidatesFromLocal 已废弃,被 available-postings
-// 的「未妥投池 ∩ 其他发运单历史存在过」单来源方案取代(见 available-postings 路由注释)。
+// 2026-11-09:本地补发候选 buildReshipCandidatesFromLocal 已废弃。
+// 2026-11-10:available-postings 候选放宽为该配送方式下全部 awaiting_deliver 货件,
+// 曾在本店其他发运单记录过仅作标记(见 available-postings 路由注释)。
 
 // 为货件列表附加"已在其他发运单"标记(2026-11-09):
 // 货件在本店其他发运单仍有活跃 ozon 行时,附加 inOtherCarriage=true 与 otherCarriageId,
@@ -2873,10 +2874,10 @@ router.post('/admin/api/order-process/carriage/posting/reship', async (req, res)
     if (!Number.isInteger(carriageId) || carriageId <= 0 || !postingNumber) {
       return res.status(400).json({ ok: false, message: 'carriageId 与 postingNumber 必填' });
     }
-    // 2026-11-09:补发校验从"活跃在其他发运单"放宽为"曾在其他发运单记录过"(含软删历史行)。
-    // 原因:Ozon 发运单完结后未上网货件会被释放回 awaiting_deliver,本地活跃行可能已被软删,
-    // 但货件仍需要(且可以)补发到当前发运单。活跃行优先,其次最近历史行。
-    const other = db
+    // 2026-11-10:候选已放宽为全部 awaiting_deliver 货件(available-postings 不再要求历史存在过),
+    // 因此补发校验同步去掉"曾在本店其他发运单记录过"的限制(否则 43682572-0077-1 这类
+    // 只在本发运单出现过、被 Ozon 释放回池的货件无法补回)。历史仅用于返回标记 fromCarriageId。
+    const fromRow = db
       .prepare(
         `SELECT carriage_id AS carriageId FROM op_carriage_posting
          WHERE store_id = ? AND posting_number = ? AND source = 'ozon'
@@ -2885,9 +2886,7 @@ router.post('/admin/api/order-process/carriage/posting/reship', async (req, res)
          LIMIT 1`
       )
       .get(store.id, postingNumber, carriageId);
-    if (!other) {
-      return res.status(400).json({ ok: false, message: '该货件未在本店其他发运单记录过,无需补发' });
-    }
+    const fromCarriageId = fromRow ? Number(fromRow.carriageId) : null;
     let currentNumbers = [];
     let cursor = '';
     let guard = 0;
@@ -2914,10 +2913,10 @@ router.post('/admin/api/order-process/carriage/posting/reship', async (req, res)
       forceReship: true,
     });
     logger.info(
-      { storeId: store.id, carriageId, postingNumber, fromCarriageId: Number(other.carriageId), ozonAdded: !alreadyIn },
+      { storeId: store.id, carriageId, postingNumber, fromCarriageId, ozonAdded: !alreadyIn },
       '[order-process] 补发货件到当前发运单'
     );
-    res.json(ok({ carriageId, postingNumber, fromCarriageId: Number(other.carriageId), ozonAdded: !alreadyIn }));
+    res.json(ok({ carriageId, postingNumber, fromCarriageId, ozonAdded: !alreadyIn }));
   } catch (e) { carriageHandleError(e, req, res, '补发货件'); }
 });
 
@@ -3066,32 +3065,35 @@ router.post('/admin/api/order-process/carriage/available-postings', async (req, 
     if (!unfulfilled.length) {
       return res.json(ok({ postings: [], count: 0, existingCarriagePostings: [] }));
     }
-    // 2) 过滤:曾在本店其他发运单存在过(含软删历史行)的货件
+    // 2) 候选 = 该配送方式下全部 awaiting_deliver 货件(2026-11-10 起不再要求历史存在过)
+    //    历史仅用于打标记:曾在本店其他发运单记录过的货件标注"曾记录·在 #xxx"
     const numbers = [...new Set(unfulfilled.map((p) => String(p?.posting_number || '').trim()).filter(Boolean))];
-    const ph = numbers.map(() => '?').join(',');
-    const rows = db
-      .prepare(
-        `SELECT posting_number AS postingNumber,
-                MAX(carriage_id) AS carriageId
-         FROM op_carriage_posting
-         WHERE store_id = ? AND source = 'ozon' AND carriage_id != ?
-           AND posting_number IN (${ph})
-         GROUP BY posting_number`
-      )
-      .all(String(store.id), Number(carriageId), ...numbers);
-    if (!rows.length) {
-      return res.json(ok({ postings: [], count: 0, existingCarriagePostings: [] }));
+    const historyByNumber = new Map();
+    if (numbers.length) {
+      const ph = numbers.map(() => '?').join(',');
+      const rows = db
+        .prepare(
+          `SELECT posting_number AS postingNumber,
+                  MAX(carriage_id) AS carriageId
+           FROM op_carriage_posting
+           WHERE store_id = ? AND source = 'ozon' AND carriage_id != ?
+             AND posting_number IN (${ph})
+           GROUP BY posting_number`
+        )
+        .all(String(store.id), Number(carriageId), ...numbers);
+      for (const r of rows) historyByNumber.set(r.postingNumber, Number(r.carriageId));
     }
-    const historyByNumber = new Map(rows.map((r) => [r.postingNumber, Number(r.carriageId)]));
-    const candidates = unfulfilled.filter((p) => historyByNumber.has(String(p?.posting_number)));
-    // 3) 本地富化 + 补发标记(候选=曾记录于其他发运单的货件,勾选即补发)
+    const candidates = unfulfilled;
+    // 3) 本地富化 + 补发标记(候选=全部待发运货件,勾选即加入当前发运单)
     if (candidates.length) {
       attachPostingProductImages(store.id, candidates);
       attachPostingShipmentDates(store.id, candidates);
       attachCrossStoreShippedForPostings(candidates, { currentStoreId: store.id });
       for (const p of candidates) {
-        p.inOtherCarriage = true;
-        p.otherCarriageId = historyByNumber.get(String(p?.posting_number));
+        if (historyByNumber.has(String(p?.posting_number))) {
+          p.inOtherCarriage = true;
+          p.otherCarriageId = historyByNumber.get(String(p?.posting_number));
+        }
       }
     }
     const existingCarriagePostings = findPostingsInOtherCarriages(store.id, candidates, carriageId);
