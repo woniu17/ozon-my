@@ -3083,8 +3083,24 @@ router.post('/admin/api/order-process/carriage/available-postings', async (req, 
         .all(String(store.id), Number(carriageId), ...numbers);
       for (const r of rows) historyByNumber.set(r.postingNumber, Number(r.carriageId));
     }
-    const candidates = unfulfilled;
-    // 3) 本地富化 + 补发标记(候选=全部待发运货件,勾选即加入当前发运单)
+    // 3) 排除已在当前发运单的货件(以 Ozon 发运单真实列表为准,2026-11-10)
+    //    未妥投池可能包含刚加入本发运单但状态尚未更新的货件,本店候选只显示可加入的
+    const currentNumbers = [];
+    let currentCursor = '';
+    let currentGuard = 0;
+    do {
+      const page = await carriagePostingList(store, Number(carriageId), { cursor: currentCursor, limit: 100 });
+      currentNumbers.push(...((page?.postings || []).map((p) => p?.posting_number).filter(Boolean)));
+      currentCursor = page?.cursor || '';
+      currentGuard += 1;
+      if (currentGuard > 50) break; // 防死循环(最多 5000 条)
+    } while (currentCursor);
+    const inCurrentCarriage = new Set(currentNumbers.map((n) => String(n)));
+    const candidates = unfulfilled.filter((p) => !inCurrentCarriage.has(String(p?.posting_number)));
+    if (!candidates.length) {
+      return res.json(ok({ postings: [], count: 0, existingCarriagePostings: [] }));
+    }
+    // 4) 本地富化 + 补发标记(候选=可加入当前发运单的待发运货件,勾选即加入)
     if (candidates.length) {
       attachPostingProductImages(store.id, candidates);
       attachPostingShipmentDates(store.id, candidates);

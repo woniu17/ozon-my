@@ -2149,7 +2149,7 @@ defineExpose({ refreshCurrent, listLoading });
       <div class="candidate-head">
         <span v-if="candidate.loading" class="field-hint">加载中…</span>
         <span v-else-if="candidate.tab === 'self'" class="field-hint">
-          本配送方式下所有待发运货件(共 {{ candidate.postings.length }} 个),勾选即加入当前发运单;曾记录于其他发运单的会标注
+          本配送方式下可加入的待发运货件(共 {{ candidate.postings.length }} 个,已排除当前发运单中的货件);曾记录于其他发运单的会标注
         </span>
         <span v-else class="field-hint">
           已选 {{ candidate.sourceStoreIds.length }}/{{ candidateStores.length }} 家店铺的待发运货件(共 {{ candidate.postings.length }} 个),已排除当前发运中货件
