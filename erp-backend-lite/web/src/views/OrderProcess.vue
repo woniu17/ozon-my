@@ -4085,11 +4085,10 @@ onUnmounted(() => {
               <div class="amt-row sub" title="成本利润率 = 利润 / 采购金额"><span class="amt-name">成本利润率</span><span class="amt-val">{{ fmtRate(pkg.profit?.profitRateCost) }}</span></div>
             </td>
             <td class="col-status">
-              <!-- 状态按行展示(2026-11-11):第一行采购 → 第二行Ozon物流 → 第三行到货 -->
+              <!-- 状态按行展示(2026-11-11):第一行采购 → 第二行Ozon物流 → 第三行到货,仅状态值,无前缀名 -->
               <div class="status-lines">
                 <!-- 第一行:采购状态 -->
                 <div class="status-line">
-                  <span class="status-label">采购</span>
                   <span :class="purchaseTag(pkg).cls">{{ purchaseTag(pkg).label }}</span>
                   <!-- 搁置徽标(与 miniapp H5 同口径):isIgnored=true 时显示,提示该包裹被人工搁置 -->
                   <span v-if="pkg.isIgnored" class="tag tag-mute" title="已搁置的包裹:不参与流转,可在「更多」菜单中恢复">搁置</span>
@@ -4098,12 +4097,10 @@ onUnmounted(() => {
                 </div>
                 <!-- 第二行:Ozon 物流状态(展示中文,悬浮提示英文原始值) -->
                 <div class="status-line">
-                  <span class="status-label">Ozon</span>
                   <span class="tag mono" :class="pkg.ozonStatus === 'cancelled' ? 'tag-err' : 'tag-mute'" :title="(pkg.ozonStatus || '') + (pkg.substatus ? '(' + pkg.substatus + ')' : '')">{{ pkg.ozonStatus ? ozonStatus(pkg.ozonStatus) : '—' }}</span>
                 </div>
-                <!-- 第四行:到货状态 -->
+                <!-- 第三行:到货状态 -->
                 <div v-if="arrivedTag(pkg)" class="status-line">
-                  <span class="status-label">到货</span>
                   <span :class="arrivedTag(pkg).cls">{{ arrivedTag(pkg).label }}</span>
                 </div>
               </div>
@@ -5744,7 +5741,7 @@ a.product-title:hover {
   min-width: 250px;
   white-space: nowrap;
 }
-/* 状态按行展示(2026-11-11):采购 → Ozon物流 → 跨店大包 → 到货,每行带灰色前缀 */
+/* 状态按行展示(2026-11-11):采购 → Ozon物流 → 到货,仅状态值无前缀名,值小一号 */
 .status-lines {
   display: flex;
   flex-direction: column;
@@ -5756,12 +5753,9 @@ a.product-title:hover {
   gap: 4px;
   white-space: nowrap;
 }
-.status-label {
-  flex: none;
-  color: #9ca3af;
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
+/* 2026-11-11:状态值字体小一号(默认 .tag 11px → 10px) */
+.status-line .tag {
+  font-size: 10px;
 }
 
 .col-actions {
