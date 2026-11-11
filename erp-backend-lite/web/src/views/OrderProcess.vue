@@ -3827,9 +3827,9 @@ onUnmounted(() => {
           </tr>
           <!-- 每订单固定 3 行:标签行(上) → 主行 → 备注行(下),空态也常驻(2026-09-15 v2) -->
           <template v-for="pkg in rows" :key="pkg.id">
-          <!-- 标签行(2026-11-11):左一列=店铺名(单独),左二列=货件号/条码/发运单号纵向堆叠,右列=标签 + 选择面板 -->
+          <!-- 标签行(2026-11-11):左列=店铺名/货件号/条码/发运单号(全部堆叠在产品信息列内),右列=标签 + 选择面板 -->
           <tr class="pkg-subrow pkg-tags-row">
-            <td class="pkg-tags-store-cell">
+            <td class="pkg-tags-meta">
               <div class="pkg-tags-meta-line">
                 <!-- 批量录采购:行勾选框(与顶部「批量录采购」按钮配合) -->
                 <input
@@ -3841,8 +3841,6 @@ onUnmounted(() => {
                 />
                 <span class="pkg-tags-store" :title="pkg.storeName">{{ pkg.storeName }}</span>
               </div>
-            </td>
-            <td class="pkg-tags-info-cell">
               <div class="pkg-tags-meta-line">
                 <template v-if="isQcPosting(pkg.postingNumber)">
                   <span class="pkg-qc-badge" title="质检单货件(02131/024785 开头)">质检单</span>
@@ -3882,7 +3880,7 @@ onUnmounted(() => {
                 </template>
               </div>
             </td>
-            <td colspan="4">
+            <td colspan="5">
               <span v-for="t in sortTagsByOrder(pkg.tags)" :key="t" class="pkg-tag" :class="[tagColorClass(t), { 'pkg-tag-on': filters.tag === t }]">
                 <button
                   class="pkg-tag-name"
@@ -5869,14 +5867,11 @@ a.product-title:hover {
   background: #f5f7ff;
   border-top: 1px solid #e5e7eb;
 }
-/* 标签行左侧两列(2026-11-11):第一列店铺名(单独),第二列货件号/条码/发运单号纵向堆叠,与右侧标签用细分隔线区分 */
-.pkg-tags-row td.pkg-tags-store-cell {
+/* 标签行左侧列(2026-11-11):店铺名/货件号/条码/发运单号全部堆叠在产品信息列内,与右侧标签用细分隔线区分 */
+.pkg-tags-row td.pkg-tags-meta {
   border-right: 1px solid #e5e7eb;
   vertical-align: middle;
-  white-space: nowrap;
-}
-.pkg-tags-row td.pkg-tags-info-cell {
-  border-right: 1px solid #e5e7eb;
+  max-width: 500px; /* 与 col-product 同宽,内容不溢出到数量列 */
 }
 .pkg-tags-meta-line {
   display: flex;
@@ -6184,6 +6179,10 @@ a.product-title:hover {
   color: #d1d5db;
   font-size: 12px;
   white-space: nowrap;
+}
+/* 多发运单时允许换行,避免超出产品信息列宽 */
+.pkg-carriage-line {
+  flex-wrap: wrap;
 }
 .pkg-barcode-line .pkg-barcode {
   color: #6d28d9; /* 条码紫色弱区分,字体同货件号(mono 18px) */
