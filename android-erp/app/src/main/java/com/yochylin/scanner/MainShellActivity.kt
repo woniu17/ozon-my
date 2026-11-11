@@ -3,6 +3,7 @@ package com.yochylin.scanner
 import android.Manifest
 import android.app.AlertDialog
 import android.app.ProgressDialog
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -10,8 +11,11 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.provider.DocumentsContract
+import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.fragment.app.Fragment
@@ -23,6 +27,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
 
 /**
  * 宿主 Activity：承载底部导航四个模块 Fragment（底部栏常驻，切换不重建页面）
@@ -60,6 +66,20 @@ class MainShellActivity : FragmentActivity(), TabHost {
                 "定位权限未开启，自动检测内网将不可用，可在系统设置中开启或手动选择网络模式",
                 Toast.LENGTH_LONG
             ).show()
+        }
+    }
+
+    // Android 9 及以下写公共 Download 目录需要存储权限（10+ 走 MediaStore 无需权限）
+    private var pendingDownloadUrl: String? = null
+    private val storagePermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val url = pendingDownloadUrl
+        if (granted && url != null) {
+            pendingDownloadUrl = null
+            doDownload(url)
+        } else {
+            Toast.makeText(this, "需要存储权限才能下载更新包，可在系统设置中开启后重试", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -217,8 +237,21 @@ class MainShellActivity : FragmentActivity(), TabHost {
     }
 
     private fun startDownload(url: String) {
+        // Android 9 及以下写公共 Download 目录需要存储权限；10+ 用 MediaStore 无需权限
+        if (Build.VERSION.SDK_INT <= 28 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingDownloadUrl = url
+            storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            return
+        }
+        doDownload(url)
+    }
+
+    private fun doDownload(url: String) {
         // 2026-11-09:内网模式下系统 DownloadManager 不走 App 自定义 DNS(会解析到公网 IP 导致下载失败),
-        // 改用 OkHttp(Api.client 含自定义 DNS)下载到 App 外部目录,完成后直接拉起安装。
+        // 改用 OkHttp(Api.client 含自定义 DNS)下载到公共 Download/ScannerShip 目录。
+        // 2026-11-11:改为下载到公共目录后提示用户手动安装(无"安装未知应用"授权时系统禁止直接安装)。
         val dlg = ProgressDialog(this).apply {
             setTitle("正在下载更新包")
             setMessage("连接服务器…")
@@ -229,9 +262,9 @@ class MainShellActivity : FragmentActivity(), TabHost {
         }
         dlg.show()
         lifecycleScope.launch {
-            val file = try {
+            val apk = try {
                 withContext(Dispatchers.IO) {
-                    downloadToFile(url) { pct ->
+                    downloadApk(url) { pct ->
                         runOnUiThread { dlg.progress = pct }
                     }
                 }
@@ -239,46 +272,145 @@ class MainShellActivity : FragmentActivity(), TabHost {
                 null
             }
             dlg.dismiss()
-            if (file != null) {
-                installApkFile(file)
+            if (apk != null) {
+                onApkDownloaded(apk)
             } else {
                 Toast.makeText(this@MainShellActivity, "下载失败，请确认网络后重试", Toast.LENGTH_LONG).show()
             }
         }
     }
 
-    /** 用 OkHttp(含自定义 DNS)下载 APK 到 App 外部目录 */
-    private fun downloadToFile(url: String, onProgress: (Int) -> Unit): File {
-        val dir = File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "update")
-        if (!dir.exists()) dir.mkdirs()
-        val target = File(dir, "scanner-ship.apk")
+    /** 下载结果：file 用于 FileProvider 直接拉起安装；displayPath 用于提示用户手动安装 */
+    private data class ApkDownload(val file: File?, val uri: Uri?, val displayPath: String)
+
+    /** 用 OkHttp(含自定义 DNS)下载 APK 到公共 Download/ScannerShip 目录 */
+    private fun downloadApk(url: String, onProgress: (Int) -> Unit): ApkDownload {
         val request = okhttp3.Request.Builder().url(url).build()
-        Api.client.newCall(request).execute().use { resp ->
+        return Api.client.newCall(request).execute().use { resp ->
             if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
             val body = resp.body ?: throw IOException("响应体为空")
             val total = body.contentLength()
-            body.byteStream().use { input ->
-                target.outputStream().use { output ->
-                    val buf = ByteArray(64 * 1024)
-                    var done = 0L
-                    var lastPct = -1
-                    while (true) {
-                        val n = input.read(buf)
-                        if (n < 0) break
-                        output.write(buf, 0, n)
-                        done += n
-                        if (total > 0) {
-                            val pct = (done * 100 / total).toInt()
-                            if (pct != lastPct) {
-                                lastPct = pct
-                                onProgress(pct)
-                            }
-                        }
-                    }
+            if (Build.VERSION.SDK_INT >= 29) {
+                saveApkViaMediaStore(body.byteStream(), total, onProgress)
+            } else {
+                saveApkToPublicDir(body.byteStream(), total, onProgress)
+            }
+        }
+    }
+
+    /** Android 10+：经 MediaStore 写入公共 Download/ScannerShip（无需存储权限） */
+    @RequiresApi(29)
+    private fun saveApkViaMediaStore(input: InputStream, total: Long, onProgress: (Int) -> Unit): ApkDownload {
+        val fileName = "scanner-ship.apk"
+        val relativePath = "${Environment.DIRECTORY_DOWNLOADS}/ScannerShip"
+        // 先删除旧记录，避免同名文件在媒体库中累积
+        contentResolver.delete(
+            MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+            "${MediaStore.Downloads.DISPLAY_NAME}=? AND ${MediaStore.Downloads.RELATIVE_PATH}=?",
+            arrayOf(fileName, relativePath)
+        )
+        val values = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+            put(MediaStore.Downloads.MIME_TYPE, "application/vnd.android.package-archive")
+            put(MediaStore.Downloads.RELATIVE_PATH, relativePath)
+        }
+        val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            ?: throw IOException("无法创建下载文件")
+        try {
+            contentResolver.openOutputStream(uri)?.use { output ->
+                copyStream(input, output, total, onProgress)
+            } ?: throw IOException("无法打开下载文件")
+        } catch (e: Exception) {
+            try { contentResolver.delete(uri, null, null) } catch (_: Exception) {}
+            throw e
+        }
+        val realPath = queryMediaPath(uri)
+        return ApkDownload(
+            file = realPath?.let { File(it) },
+            uri = uri,
+            displayPath = realPath ?: "Download/ScannerShip/$fileName"
+        )
+    }
+
+    /** Android 9 及以下：直接写入公共 Download/ScannerShip */
+    private fun saveApkToPublicDir(input: InputStream, total: Long, onProgress: (Int) -> Unit): ApkDownload {
+        val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "ScannerShip")
+        if (!dir.exists()) dir.mkdirs()
+        val target = File(dir, "scanner-ship.apk")
+        target.outputStream().use { output ->
+            copyStream(input, output, total, onProgress)
+        }
+        return ApkDownload(file = target, uri = null, displayPath = target.absolutePath)
+    }
+
+    /** 流式复制并回调进度 */
+    private fun copyStream(input: InputStream, output: OutputStream, total: Long, onProgress: (Int) -> Unit) {
+        val buf = ByteArray(64 * 1024)
+        var done = 0L
+        var lastPct = -1
+        while (true) {
+            val n = input.read(buf)
+            if (n < 0) break
+            output.write(buf, 0, n)
+            done += n
+            if (total > 0) {
+                val pct = (done * 100 / total).toInt()
+                if (pct != lastPct) {
+                    lastPct = pct
+                    onProgress(pct)
                 }
             }
         }
-        return target
+    }
+
+    /** 查询 MediaStore 下载文件的实际路径（用于 FileProvider 直接安装） */
+    @RequiresApi(29)
+    private fun queryMediaPath(uri: Uri): String? {
+        return try {
+            // _data 是隐藏列名，直接用字符串（MediaStore.Downloads._DATA 对 Kotlin 不可见）
+            contentResolver.query(uri, arrayOf("_data"), null, null, null)?.use { c ->
+                if (c.moveToFirst() && !c.isNull(0)) c.getString(0) else null
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** 下载完成：已有"安装未知应用"授权则直接拉起安装，否则提示用户到文件管理器手动安装 */
+    private fun onApkDownloaded(apk: ApkDownload) {
+        if (apk.file != null && canInstallUnknownApps()) {
+            installApkFile(apk.file)
+            return
+        }
+        val path = apk.displayPath
+        val dirName = path.substringBeforeLast('/')
+        AlertDialog.Builder(this)
+            .setTitle("下载完成")
+            .setMessage("更新包已保存到：\n$path\n\n系统未允许本应用直接安装，请打开文件管理器，进入「$dirName」目录点击 scanner-ship.apk 手动安装。")
+            .setPositiveButton("打开文件夹") { _, _ -> openDownloadFolder() }
+            .setNegativeButton("知道了", null)
+            .show()
+    }
+
+    /** 是否允许本应用直接安装未知来源应用（Android 8+ 需用户在设置中授权） */
+    private fun canInstallUnknownApps(): Boolean {
+        return Build.VERSION.SDK_INT < 26 || packageManager.canRequestPackageInstalls()
+    }
+
+    /** 打开系统文件管理器定位到 Download/ScannerShip 目录 */
+    private fun openDownloadFolder() {
+        try {
+            val treeUri = Uri.parse("content://com.android.externalstorage.documents/tree/primary")
+            val childUri = DocumentsContract.buildChildDocumentsUriUsingTree(
+                treeUri, "primary:Download/ScannerShip"
+            )
+            val intent = Intent(Intent.ACTION_VIEW)
+                .setDataAndType(childUri, "resource/folder")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            startActivity(intent)
+        } catch (e: Exception) {
+            Toast.makeText(this, "请到系统文件管理器的 Download/ScannerShip 目录点击 APK 安装", Toast.LENGTH_LONG).show()
+        }
     }
 
     /** 安装已下载的 APK（Android 7.0+ 经 FileProvider 转 content://） */
