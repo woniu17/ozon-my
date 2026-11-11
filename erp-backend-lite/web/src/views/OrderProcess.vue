@@ -4085,9 +4085,9 @@ onUnmounted(() => {
               <div class="amt-row sub" title="成本利润率 = 利润 / 采购金额"><span class="amt-name">成本利润率</span><span class="amt-val">{{ fmtRate(pkg.profit?.profitRateCost) }}</span></div>
             </td>
             <td class="col-status">
-              <!-- 状态按行展示(2026-11-11):第一行采购 → 第二行Ozon物流 → 第三行到货,仅状态值,无前缀名 -->
+              <!-- 状态同一行展示(2026-11-11):采购/Ozon物流/到货横向排开,仅状态值,无前缀名 -->
               <div class="status-lines">
-                <!-- 第一行:采购状态 -->
+                <!-- 采购状态 -->
                 <div class="status-line">
                   <span :class="purchaseTag(pkg).cls">{{ purchaseTag(pkg).label }}</span>
                   <!-- 搁置徽标(与 miniapp H5 同口径):isIgnored=true 时显示,提示该包裹被人工搁置 -->
@@ -4095,11 +4095,11 @@ onUnmounted(() => {
                   <!-- 全局搜索模式:显示包裹所属操作状态(跨tab辨识) -->
                   <span v-if="globalSearch.active" class="tag" :class="operateTag(pkg).cls" title="包裹所属状态">{{ operateTag(pkg).label }}</span>
                 </div>
-                <!-- 第二行:Ozon 物流状态(展示中文,悬浮提示英文原始值) -->
+                <!-- Ozon 物流状态(展示中文,悬浮提示英文原始值) -->
                 <div class="status-line">
                   <span class="tag mono" :class="pkg.ozonStatus === 'cancelled' ? 'tag-err' : 'tag-mute'" :title="(pkg.ozonStatus || '') + (pkg.substatus ? '(' + pkg.substatus + ')' : '')">{{ pkg.ozonStatus ? ozonStatus(pkg.ozonStatus) : '—' }}</span>
                 </div>
-                <!-- 第三行:到货状态 -->
+                <!-- 到货状态 -->
                 <div v-if="arrivedTag(pkg)" class="status-line">
                   <span :class="arrivedTag(pkg).cls">{{ arrivedTag(pkg).label }}</span>
                 </div>
@@ -5741,14 +5741,16 @@ a.product-title:hover {
   min-width: 250px;
   white-space: nowrap;
 }
-/* 状态按行展示(2026-11-11):采购 → Ozon物流 → 到货,仅状态值无前缀名,值小一号 */
+/* 状态同一行展示(2026-11-11):采购/Ozon物流/到货横向排开,仅状态值无前缀名,值小一号;超宽自动换行 */
 .status-lines {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
 }
 .status-line {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 4px;
   white-space: nowrap;
