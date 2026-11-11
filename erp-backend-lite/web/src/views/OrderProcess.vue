@@ -3827,9 +3827,9 @@ onUnmounted(() => {
           </tr>
           <!-- 每订单固定 3 行:标签行(上) → 主行 → 备注行(下),空态也常驻(2026-09-15 v2) -->
           <template v-for="pkg in rows" :key="pkg.id">
-          <!-- 标签行分两列(2026-09-16:订单信息列取消,店铺名+货件号+复制上移到第一列):第一列=店铺+货件号+复制,第二列=标签 + 选择面板 -->
+          <!-- 标签行(2026-11-11):左一列=店铺名(单独),左二列=货件号/条码/发运单号纵向堆叠,右列=标签 + 选择面板 -->
           <tr class="pkg-subrow pkg-tags-row">
-            <td colspan="2" class="pkg-tags-meta">
+            <td class="pkg-tags-store-cell">
               <div class="pkg-tags-meta-line">
                 <!-- 批量录采购:行勾选框(与顶部「批量录采购」按钮配合) -->
                 <input
@@ -3840,6 +3840,10 @@ onUnmounted(() => {
                   @change.stop="toggleBatchCheck(pkg)"
                 />
                 <span class="pkg-tags-store" :title="pkg.storeName">{{ pkg.storeName }}</span>
+              </div>
+            </td>
+            <td class="pkg-tags-info-cell">
+              <div class="pkg-tags-meta-line">
                 <template v-if="isQcPosting(pkg.postingNumber)">
                   <span class="pkg-qc-badge" title="质检单货件(02131/024785 开头)">质检单</span>
                   <span class="mono qc-posting" title="质检单货件号">{{ pkg.postingNumber }}</span>
@@ -5865,8 +5869,13 @@ a.product-title:hover {
   background: #f5f7ff;
   border-top: 1px solid #e5e7eb;
 }
-/* 标签行第一列(2026-09-16 订单信息列取消):店铺名+货件号+复制小图标,与右侧标签用细分隔线区分 */
-.pkg-tags-row td.pkg-tags-meta {
+/* 标签行左侧两列(2026-11-11):第一列店铺名(单独),第二列货件号/条码/发运单号纵向堆叠,与右侧标签用细分隔线区分 */
+.pkg-tags-row td.pkg-tags-store-cell {
+  border-right: 1px solid #e5e7eb;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.pkg-tags-row td.pkg-tags-info-cell {
   border-right: 1px solid #e5e7eb;
 }
 .pkg-tags-meta-line {
