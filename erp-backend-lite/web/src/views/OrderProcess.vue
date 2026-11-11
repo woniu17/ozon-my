@@ -3314,28 +3314,6 @@ function countdown(pkg) {
 
 // 2026-11-07:跨店大包已发出悬浮提示(来源发运单/状态/OGL 单号)
 // 2026-11-08:formed(已形成)视为"已随大包创建发运",received/delivered/closed 视为"已随大包发出"
-function crossStoreShippedTitle(pkg) {
-  const s = pkg?.crossStoreShipped;
-  if (!s) return '';
-  const created = s.carriageStatus === 'formed';
-  const parts = [`已随发运单 ${s.carriageId} ${created ? '创建发运' : '发出'}`];
-  if (s.carriageStatus) parts.push(`状态 ${s.carriageStatus}`);
-  if (s.trackingNumber) parts.push(`OGL ${s.trackingNumber}`);
-  if (s.addedAt) parts.push(`加入 ${s.addedAt}`);
-  return parts.join('，') + '；后续发运/打单均为 Ozon 补登记';
-}
-
-// 2026-11-08:多发运单 OGL 徽标悬浮提示(发运单号/来源/状态/快递单号/加入时间)
-function oglLinkTitle(pkg, l) {
-  const parts = [`发运单 ${l.carriageId}`];
-  if (l.source === 'manual') parts.push('实际发出大包');
-  else if (l.source === 'ozon') parts.push('Ozon 补登记');
-  if (l.carriageStatus) parts.push(`状态 ${l.carriageStatus}`);
-  if (l.trackingNumber) parts.push(`快递单号 ${l.trackingNumber}`);
-  if (l.addedAt) parts.push(`加入 ${l.addedAt}`);
-  return parts.join('，');
-}
-
 function purchaseTag(pkg) {
   if (pkg.purchaseStatus === 'none') return { cls: 'tag tag-mute', label: '未采购' };
   return { cls: 'tag tag-ok', label: '已采购' };
@@ -4107,7 +4085,7 @@ onUnmounted(() => {
               <div class="amt-row sub" title="成本利润率 = 利润 / 采购金额"><span class="amt-name">成本利润率</span><span class="amt-val">{{ fmtRate(pkg.profit?.profitRateCost) }}</span></div>
             </td>
             <td class="col-status">
-              <!-- 状态按行展示(2026-11-11):第一行采购 → 第二行Ozon物流 → 第三行跨店大包 → 第四行到货 -->
+              <!-- 状态按行展示(2026-11-11):第一行采购 → 第二行Ozon物流 → 第三行到货 -->
               <div class="status-lines">
                 <!-- 第一行:采购状态 -->
                 <div class="status-line">
@@ -4118,31 +4096,16 @@ onUnmounted(() => {
                   <!-- 全局搜索模式:显示包裹所属操作状态(跨tab辨识) -->
                   <span v-if="globalSearch.active" class="tag" :class="operateTag(pkg).cls" title="包裹所属状态">{{ operateTag(pkg).label }}</span>
                 </div>
-                <!-- 第二行:Ozon 物流状态(展示原始值,中文释义放悬浮提示) -->
+                <!-- 第二行:Ozon 物流状态(展示中文,悬浮提示英文原始值) -->
                 <div class="status-line">
                   <span class="status-label">Ozon</span>
-                  <span class="tag mono" :class="pkg.ozonStatus === 'cancelled' ? 'tag-err' : 'tag-mute'" :title="ozonStatus(pkg.ozonStatus) + (pkg.substatus ? '(' + pkg.substatus + ')' : '')">{{ pkg.ozonStatus || '—' }}</span>
-                </div>
-                <!-- 第三行:跨店打包标记(2026-11-07):已随跨店大包发出,后续发运/打单均为 Ozon 补登记 -->
-                <div v-if="pkg.crossStoreShipped" class="status-line">
-                  <span class="status-label">大包</span>
-                  <span class="tag tag-info" :title="crossStoreShippedTitle(pkg)">已随 {{ pkg.crossStoreShipped.carriageId }} 大包{{ pkg.crossStoreShipped.carriageStatus === 'formed' ? '创建发运' : '发出' }}</span>
+                  <span class="tag mono" :class="pkg.ozonStatus === 'cancelled' ? 'tag-err' : 'tag-mute'" :title="(pkg.ozonStatus || '') + (pkg.substatus ? '(' + pkg.substatus + ')' : '')">{{ pkg.ozonStatus ? ozonStatus(pkg.ozonStatus) : '—' }}</span>
                 </div>
                 <!-- 第四行:到货状态 -->
                 <div v-if="arrivedTag(pkg)" class="status-line">
                   <span class="status-label">到货</span>
                   <span :class="arrivedTag(pkg).cls">{{ arrivedTag(pkg).label }}</span>
                 </div>
-              </div>
-              <!-- OGL 国内集运仓快递单号(2026-11-06 读时 join):单号属于发运单,按"货件→发运"派生展示;
-                   跨店大包+补登记场景同时显示全部发运单(运单号+快递单号),实际发出大包(manual)与补登记(ozon)分色(2026-11-08) -->
-              <div v-if="pkg.headLogisticsNo || (pkg.carriageLinks && pkg.carriageLinks.length)" class="sub ogl-links">
-                <template v-if="pkg.carriageLinks && pkg.carriageLinks.length > 1">
-                  <span v-for="(l, i) in pkg.carriageLinks" :key="i" class="pkg-ogl-badge"
-                        :class="l.source === 'manual' ? 'ogl-manual' : 'ogl-ozon'"
-                        :title="oglLinkTitle(pkg, l)">运单 {{ l.carriageId }}：{{ l.trackingNumber }}</span>
-                </template>
-                <span v-else class="pkg-ogl-badge" :title="`OGL 国内集运仓快递单号(${pkg.headLogisticsCompany || '国内快递'})：${pkg.headLogisticsNo.split(',').join('、')}`">OGL：{{ pkg.headLogisticsNo.split(',')[0] }}{{ pkg.headLogisticsNo.includes(',') ? ` 等${pkg.headLogisticsNo.split(',').length}个` : '' }}</span>
               </div>
               <!-- 取消原因细分标签(仅 cancelled 状态订单显示) -->
               <div v-if="pkg.ozonStatus === 'cancelled' && cancelReasonLabel(pkg)" class="sub cancel-reason-line">
@@ -6023,32 +5986,6 @@ a.product-title:hover {
   font-size: 11px;
   font-weight: 700;
   white-space: nowrap;
-}
-
-/* OGL 国内集运仓快递单号徽标(2026-10-30):打印货运标签时从圆通面单 PDF 自动解析回填 */
-.pkg-ogl-badge {
-  flex: none;
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: #ecfdf5;
-  border: 1px solid #a7f3d0;
-  color: #047857;
-  font-size: 11px;
-  font-weight: 600;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  white-space: nowrap;
-}
-
-/* 2026-11-08:多发运单 OGL 徽标(跨店大包实际发出 + Ozon 补登记同时展示) */
-.ogl-links {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-.pkg-ogl-badge.ogl-ozon {
-  background: #eff6ff;
-  border-color: #bfdbfe;
-  color: #1d4ed8;
 }
 
 /* 拆单母件/子件徽标(2026-09-18):子件琥珀、母件靛蓝 */
