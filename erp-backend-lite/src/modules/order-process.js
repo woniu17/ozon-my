@@ -1657,6 +1657,123 @@ router.post('/admin/api/order-process/logs', (req, res, next) => {
   }
 });
 
+// ── 入库后面单条码/PDF 预取(2026-11-10)────────────────────────
+// 入库成功(Ozon 状态进入 awaiting_registration/awaiting_deliver)后 fire-and-forget
+// 拉取面单 PDF → 解析下条码 → 写入 op_posting_barcode,并缓存 PDF 到 waybill-cache。
+// 目的:扫描打单时本地条码/PDF 已就绪——扫码秒命中(findPostingByBarcode)、
+// 打印面单免 Ozon 等待(getWaybill 直接 cacheHit)。
+// packageLabel 对 awaiting_registration(面单装配 45-60s)抛 "aren't ready",
+// 因此需延迟重试:15s × 最多 10 次(约 2.5 分钟覆盖);全局并发 3,超出排队。
+const BARCODE_PREFETCH_RETRY_INTERVAL_MS = 15 * 1000;
+const BARCODE_PREFETCH_MAX_RETRIES = 10;
+const BARCODE_PREFETCH_MAX_CONCURRENCY = 3;
+
+// key: `${storeId}|${postingNumber}` → { retries, timer? }(存在=预取中/已调度重试,用于去重)
+const barcodePrefetchState = new Map();
+let barcodePrefetchActive = 0; // 当前占用并发槽的任务数
+const barcodePrefetchQueue = []; // 等待并发槽的任务 { storeId, postingNumber, key }
+
+// 对外入口:fire-and-forget 触发(入库成功路径调用,不阻塞响应)
+function fireAndForgetBarcodePrefetch(storeId, postingNumber) {
+  if (!storeId || !postingNumber) return;
+  enqueueBarcodePrefetch(String(storeId), String(postingNumber), 0);
+}
+
+function enqueueBarcodePrefetch(storeId, postingNumber, retries) {
+  const key = `${storeId}|${postingNumber}`;
+  if (barcodePrefetchState.has(key)) return; // 已预取中/已调度重试 → 去重
+  barcodePrefetchState.set(key, { retries });
+  barcodePrefetchQueue.push({ storeId, postingNumber, key });
+  pumpBarcodePrefetch();
+}
+
+function pumpBarcodePrefetch() {
+  while (barcodePrefetchActive < BARCODE_PREFETCH_MAX_CONCURRENCY && barcodePrefetchQueue.length) {
+    const job = barcodePrefetchQueue.shift();
+    barcodePrefetchActive += 1;
+    runBarcodePrefetch(job).finally(() => {
+      barcodePrefetchActive -= 1;
+      pumpBarcodePrefetch();
+    });
+  }
+}
+
+async function runBarcodePrefetch({ storeId, postingNumber, key }) {
+  try {
+    const outcome = await doBarcodePrefetch(storeId, postingNumber);
+    if (outcome !== 'retry') {
+      barcodePrefetchState.delete(key); // success / abort → 清理;retry 由定时器保留并重试
+    }
+  } catch (e) {
+    // 意外错误:不重试,清理(打印时现有兜底)
+    barcodePrefetchState.delete(key);
+    logger.warn({ storeId, postingNumber, err: e?.message }, '[barcode-prefetch] 预取异常');
+  }
+}
+
+// 执行一次预取;返回 'success' | 'retry' | 'abort'
+async function doBarcodePrefetch(storeId, postingNumber) {
+  // 本地已有条码映射 → 无需预取(幂等)
+  const existing = db
+    .prepare(
+      `SELECT 1 FROM op_posting_barcode
+       WHERE store_id = ? AND posting_number = ? AND lower_barcode IS NOT NULL`
+    )
+    .get(storeId, postingNumber);
+  if (existing) return 'success';
+
+  const store = (config.loadStores() || []).find((s) => s.id === storeId);
+  if (!store || !store?.sync_credentials?.clientId) return 'abort';
+
+  try {
+    const { buffer } = await packageLabel(store, [postingNumber]);
+    // ① 缓存面单 PDF(打印时 getWaybill 直接命中)
+    try {
+      setWaybill(storeId, [postingNumber], buffer);
+    } catch (cacheErr) {
+      logger.warn({ storeId, postingNumber, err: cacheErr?.message }, '[barcode-prefetch] PDF 缓存失败');
+    }
+    // ② 解析下条码并回填映射(扫描打单扫码用)
+    const barcodes = await extractWaybillBarcodes(buffer);
+    const bc = barcodes?.[0];
+    if (bc) {
+      upsertPostingBarcode({ storeId, postingNumber, lowerBarcode: bc, fetchedAt: new Date().toISOString() });
+      logger.info({ storeId, postingNumber }, '[barcode-prefetch] 面单条码预取成功');
+    }
+    return 'success';
+  } catch (e) {
+    const msg = e?.message || String(e);
+    if (/aren't ready/i.test(msg)) {
+      scheduleBarcodePrefetchRetry(storeId, postingNumber);
+      return 'retry';
+    }
+    // 状态不允许(INVALID_ARGUMENT)/其他错误:放弃,不重试(打印时现有兜底)
+    logger.info({ storeId, postingNumber, err: msg }, '[barcode-prefetch] 面单预取放弃(非未就绪错误)');
+    return 'abort';
+  }
+}
+
+function scheduleBarcodePrefetchRetry(storeId, postingNumber) {
+  const key = `${storeId}|${postingNumber}`;
+  const st = barcodePrefetchState.get(key);
+  if (!st) return;
+  if (st.retries >= BARCODE_PREFETCH_MAX_RETRIES) {
+    barcodePrefetchState.delete(key);
+    logger.info({ storeId, postingNumber, retries: st.retries }, '[barcode-prefetch] 重试次数耗尽,放弃预取');
+    return;
+  }
+  st.retries += 1;
+  st.timer = setTimeout(() => {
+    // 先清 state,让 enqueue 可重新入队(带已累计的 retries)
+    const cur = barcodePrefetchState.get(key);
+    if (!cur) return;
+    const retries = cur.retries;
+    barcodePrefetchState.delete(key);
+    enqueueBarcodePrefetch(storeId, postingNumber, retries);
+  }, BARCODE_PREFETCH_RETRY_INTERVAL_MS);
+  if (st.timer.unref) st.timer.unref(); // 不阻止进程退出
+}
+
 // ── 入库(2026-09-15)─────────────────────────────────────────
 // POST body: { packageId: number }
 // 调 Ozon /v4/posting/fbs/ship 搜集订单(不拆分:单 package 含全部商品),UI 名"入库"
@@ -1680,12 +1797,13 @@ function markStocked(packageId) {
   ).run(now, now, packageId);
 }
 router.post('/admin/api/order-process/ship', async (req, res, next) => {
+  let row = null; // 提升到 try 外:catch 中引用 row?.postingNumber 避免 ReferenceError(2026-11-10)
   try {
     const packageId = Number(req.body?.packageId);
     if (!Number.isInteger(packageId) || packageId <= 0) {
       return res.status(400).json({ ok: false, message: 'packageId 必须为正整数' });
     }
-    const row = db
+    row = db
       .prepare(
         `SELECT p.id, p.operate_status AS operateStatus, p.is_ignored AS isIgnored,
                 o.posting_number AS postingNumber, o.store_id AS storeId
@@ -1754,6 +1872,8 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
     if (ozonStatus === 'awaiting_registration' || ozonStatus === 'awaiting_deliver') {
       orderPackageDao.syncPosting(store.id, p1); // 顺带校准本地状态
       markStocked(packageId); // 本地推进:待入库 → 待打单
+      // 2026-11-10:状态已入库,后台预取面单 PDF/条码(扫描打单加速,fire-and-forget)
+      fireAndForgetBarcodePrefetch(row.storeId, row.postingNumber);
       logOrderAction({
         packageId, postingNumber: row.postingNumber, storeId: row.storeId,
         action: 'ship',
@@ -1830,6 +1950,10 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
       if (['awaiting_registration', 'awaiting_deliver', 'delivering', 'driver_pickup', 'delivered'].includes(stNow)) {
         if (pNow) orderPackageDao.syncPosting(store.id, pNow); // 校准本地 Ozon 状态,前端刷新后按钮自然隐藏
         markStocked(packageId); // 本地推进:待入库 → 待打单
+        // 2026-11-10:竞态已入库,后台预取面单 PDF/条码(仅待发运前状态可打印面单)
+        if (stNow === 'awaiting_registration' || stNow === 'awaiting_deliver') {
+          fireAndForgetBarcodePrefetch(row.storeId, row.postingNumber);
+        }
         logger.info(
           { packageId, postingNumber: row.postingNumber, status: stNow, substatus: pNow?.substatus || null },
           '[order-process] 入库竞态已入库(HAS_INCORRECT_STATUS),幂等返回'
@@ -1909,6 +2033,8 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
     // 5) 成功:同步最新 posting 落库(校准本地 Ozon 状态)+ 推进本地 待入库 → 待打单
     orderPackageDao.syncPosting(store.id, p2);
     markStocked(packageId);
+    // 2026-11-10:入库成功,后台预取面单 PDF/条码(扫描打单加速,fire-and-forget)
+    fireAndForgetBarcodePrefetch(row.storeId, row.postingNumber);
     logger.info({ packageId, postingNumber: row.postingNumber, newStatus, newSub }, '[order-process] 入库成功');
     logOrderAction({
       packageId, postingNumber: row.postingNumber, storeId: row.storeId,
