@@ -3827,21 +3827,25 @@ onUnmounted(() => {
           </tr>
           <!-- 每订单固定 3 行:标签行(上) → 主行 → 备注行(下),空态也常驻(2026-09-15 v2) -->
           <template v-for="pkg in rows" :key="pkg.id">
-          <!-- 标签行(2026-11-11):左列=店铺名/货件号/条码/发运单号(全部堆叠在产品信息列内),右列=标签 + 选择面板 -->
+          <!-- 标签行(2026-11-11):产品信息列内分两列——左列店铺名(单独),右列货件号/条码/发运单号堆叠;再右=标签 + 选择面板 -->
           <tr class="pkg-subrow pkg-tags-row">
             <td class="pkg-tags-meta">
-              <div class="pkg-tags-meta-line">
-                <!-- 批量录采购:行勾选框(与顶部「批量录采购」按钮配合) -->
-                <input
-                  type="checkbox"
-                  class="pkg-check"
-                  :checked="batchSel.has(pkg.id)"
-                  title="勾选多个包裹后,用顶部「批量录采购」把采购订单一次性关联到这些包裹"
-                  @change.stop="toggleBatchCheck(pkg)"
-                />
-                <span class="pkg-tags-store" :title="pkg.storeName">{{ pkg.storeName }}</span>
-              </div>
-              <div class="pkg-tags-meta-line">
+              <div class="pkg-tags-meta-cols">
+                <div class="pkg-tags-store-cell">
+                  <div class="pkg-tags-meta-line">
+                    <!-- 批量录采购:行勾选框(与顶部「批量录采购」按钮配合) -->
+                    <input
+                      type="checkbox"
+                      class="pkg-check"
+                      :checked="batchSel.has(pkg.id)"
+                      title="勾选多个包裹后,用顶部「批量录采购」把采购订单一次性关联到这些包裹"
+                      @change.stop="toggleBatchCheck(pkg)"
+                    />
+                    <span class="pkg-tags-store" :title="pkg.storeName">{{ pkg.storeName }}</span>
+                  </div>
+                </div>
+                <div class="pkg-tags-info-cell">
+                  <div class="pkg-tags-meta-line">
                 <template v-if="isQcPosting(pkg.postingNumber)">
                   <span class="pkg-qc-badge" title="质检单货件(02131/024785 开头)">质检单</span>
                   <span class="mono qc-posting" title="质检单货件号">{{ pkg.postingNumber }}</span>
@@ -3879,6 +3883,8 @@ onUnmounted(() => {
                   </template>
                 </template>
               </div>
+              </div>
+            </div>
             </td>
             <td colspan="5">
               <span v-for="t in sortTagsByOrder(pkg.tags)" :key="t" class="pkg-tag" :class="[tagColorClass(t), { 'pkg-tag-on': filters.tag === t }]">
@@ -5872,6 +5878,27 @@ a.product-title:hover {
   border-right: 1px solid #e5e7eb;
   vertical-align: middle;
   max-width: 500px; /* 与 col-product 同宽,内容不溢出到数量列 */
+}
+/* 2026-11-11:标签行产品信息列内再分两列——左列店铺名(单独),右列货件号/条码/发运单,均在商品列内对齐 */
+.pkg-tags-meta-cols {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.pkg-tags-store-cell {
+  flex: 0 0 160px;
+  min-width: 0;
+}
+.pkg-tags-store {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pkg-tags-info-cell {
+  flex: 1;
+  min-width: 0;
 }
 .pkg-tags-meta-line {
   display: flex;
