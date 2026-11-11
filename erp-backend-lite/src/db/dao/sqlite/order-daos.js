@@ -1182,6 +1182,32 @@ function attachPostingBarcodes(pkgRows) {
   }
 }
 
+// ── 货件包装照片(2026-11-11):op_package_photo 按 package_id 批量 join,详情页展示 ──
+function attachPackagePhotos(pkgRows) {
+  if (!pkgRows.length) return;
+  const ids = [...new Set(pkgRows.map((p) => p.id).filter((v) => v != null))];
+  if (!ids.length) return;
+  let rows;
+  try {
+    rows = db.prepare(
+      `SELECT package_id AS pid, id, photo_url, uploaded_at
+       FROM op_package_photo
+       WHERE package_id IN (${ids.map(() => '?').join(',')})
+       ORDER BY uploaded_at DESC, id DESC`
+    ).all(...ids);
+  } catch {
+    return;
+  }
+  const byPid = new Map();
+  for (const r of rows) {
+    if (!byPid.has(r.pid)) byPid.set(r.pid, []);
+    byPid.get(r.pid).push({ id: r.id, photoUrl: r.photo_url, uploadedAt: r.uploaded_at });
+  }
+  for (const p of pkgRows) {
+    p.photos = byPid.get(p.id) || [];
+  }
+}
+
 // ── 跨店大包已发出识别:读时 join 派生(2026-11-07) ──
 // 货件"已随跨店大包发出" ⟺ op_carriage_posting 存在 source='manual' 的活跃行,
 // 且所属发运单(op_carriage_history.status)为 received/delivered/closed(已发出)
@@ -1295,6 +1321,8 @@ function listPackages(filters = {}) {
     attachCarriageOglTracking(pkgRows);
     // 面单条码:op_posting_barcode 读时派生(2026-11-11),货件号下方展示+复制
     attachPostingBarcodes(pkgRows);
+    // 货件包装照片:op_package_photo 读时派生(2026-11-11,拍照发运),列表显示已拍张数
+    attachPackagePhotos(pkgRows);
   }
   return {
     total,
@@ -1765,6 +1793,8 @@ function getPackageDetail(packageId) {
     .get(packageId);
   if (!row) return null;
   const pkg = rowToPackage(row);
+  // 货件包装照片(2026-11-11,拍照发运):详情页按包裹展示已上传照片
+  attachPackagePhotos([pkg]);
   const items = getItemsByOrderIds([row.ozon_order_id]);
   const { links } = getPurchasesByPackageIds([packageId]);
   // 采购物流轨迹:从关联采购单的 trace_json 解析(2026-10-17,原 op_logistics_trace 表无数据导致详情页轨迹永远为空)

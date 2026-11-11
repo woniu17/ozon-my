@@ -89,6 +89,14 @@ data class Pkg(
     val headLogisticsNo: String? = null,      // OGL 国内集运仓快递单号(发运单派生)
     val headLogisticsCompany: String? = null, // 快递公司(有单号时固定"圆通速递")
     val carriageLinks: List<CarriageLink>? = null, // 活跃发运关联(跨店大包实际发出 + Ozon 补登记)
+    val photos: List<PackagePhoto>? = null,    // 货件包装照片(2026-11-11,拍照发运)
+)
+
+/** 货件包装照片(2026-11-11,拍照发运上传) */
+data class PackagePhoto(
+    val id: Long? = null,
+    val photoUrl: String? = null,   // 相对 URL(/uploads/pack-photos/...)
+    val uploadedAt: String? = null, // 上传时间(UTC)
 )
 
 /** 货件-发运关联(2026-11-11,op_carriage_posting JOIN op_carriage_history 派生) */

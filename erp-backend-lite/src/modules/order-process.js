@@ -21,6 +21,10 @@
 //   GET  /admin/api/order-process/sync-progress  实时同步进度(店铺数/已处理/已拉订单数)
 import { Router } from 'express';
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import sharp from 'sharp';
 import { db } from '../db/index.js';
 import { ok } from '../utils/response.js';
 import { logOrderAction } from '../utils/order-log.js';
@@ -3751,6 +3755,58 @@ router.post('/admin/api/order-process/sync-package-purchase-logistics', async (r
     const msg = e?.message || String(e);
     logger.warn({ err: msg, packageId: req.body?.packageId }, '[order-process] 单包裹采购物流同步失败');
     res.status(502).json({ ok: false, message: msg });
+  }
+});
+
+// ── 货件包装照片上传(2026-11-11,安卓拍照发运)──────────
+// POST body: { storeId, packageId?, postingNumber, imageBase64 }
+// 照片压缩后保存到 public/uploads/pack-photos/{storeId}/{postingNumber}_{ts}.jpg,
+// 记录写入 op_package_photo,订单详情页按货件展示。base64 JSON 传输(express.json 50mb 已够)。
+router.post('/admin/api/order-process/photo-upload', async (req, res, next) => {
+  try {
+    const { storeId, packageId, postingNumber, imageBase64 } = req.body || {};
+    const posting = String(postingNumber || '').trim();
+    const b64 = String(imageBase64 || '').trim();
+    if (!posting) return res.status(400).json({ ok: false, message: 'postingNumber 必填' });
+    if (!b64) return res.status(400).json({ ok: false, message: 'imageBase64 必填' });
+    // 兼容 data:image/...;base64, 前缀与裸 base64 两种形式
+    const m = b64.match(/^data:image\/[\w.+-]+;base64,(.*)$/s);
+    const raw = m ? m[1] : b64;
+    const buf = Buffer.from(raw, 'base64');
+    if (!buf.length) return res.status(400).json({ ok: false, message: '图片内容为空' });
+    // sharp 压缩校验:最长边 1600px、JPEG 质量 85;非图片输入会抛错
+    let out;
+    try {
+      out = await sharp(buf)
+        .rotate()
+        .resize(1600, 1600, { fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality: 85 })
+        .toBuffer();
+    } catch {
+      return res.status(400).json({ ok: false, message: '图片解码失败,请上传 JPG/PNG/WebP' });
+    }
+    const store = String(storeId || 'unknown').replace(/[^\w-]/g, '');
+    const relDir = `uploads/pack-photos/${store}`;
+    const absDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'public', relDir);
+    mkdirSync(absDir, { recursive: true });
+    const fileName = `${posting}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.jpg`;
+    const relPath = `/${relDir}/${fileName}`;
+    writeFileSync(join(absDir, fileName), out);
+    const pid = packageId != null ? Number(packageId) : null;
+    const r = db.prepare(
+      `INSERT INTO op_package_photo (store_id, package_id, posting_number, photo_url, uploader)
+       VALUES (?, ?, ?, ?, ?)`
+    ).run(
+      store || null,
+      Number.isInteger(pid) && pid > 0 ? pid : null,
+      posting,
+      relPath,
+      req.user?.phone || 'system'
+    );
+    logger.info({ storeId, packageId: pid, postingNumber: posting, photoUrl: relPath }, '[order-process] 货件包装照片上传成功');
+    res.json(ok({ photoId: Number(r.lastInsertRowid), photoUrl: relPath }));
+  } catch (e) {
+    next(e);
   }
 });
 

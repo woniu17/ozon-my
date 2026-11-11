@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
@@ -92,6 +93,8 @@ class OrderDetailActivity : ComponentActivity() {
     private lateinit var dMoreInfo: LinearLayout
     private lateinit var dProdTitle: TextView
     private lateinit var dProdContainer: LinearLayout
+    private lateinit var dPhotoCard: LinearLayout  // 包装照片卡片(2026-11-11,拍照发运)
+    private lateinit var dPhotoContainer: LinearLayout
     private lateinit var dPoTitle: TextView
     private lateinit var dPoContainer: LinearLayout
     private lateinit var dHistoryContainer: LinearLayout
@@ -147,6 +150,8 @@ class OrderDetailActivity : ComponentActivity() {
         dMoreInfo = findViewById(R.id.dMoreInfo)
         dProdTitle = findViewById(R.id.dProdTitle)
         dProdContainer = findViewById(R.id.dProdContainer)
+        dPhotoCard = findViewById(R.id.dPhotoCard)
+        dPhotoContainer = findViewById(R.id.dPhotoContainer)
         dPoTitle = findViewById(R.id.dPoTitle)
         dPoContainer = findViewById(R.id.dPoContainer)
         dHistoryContainer = findViewById(R.id.dHistoryContainer)
@@ -597,6 +602,7 @@ class OrderDetailActivity : ComponentActivity() {
         renderSplitAnalysis(p)
         renderMoreInfo()
         renderItems(detail.items ?: p.items ?: emptyList())
+        renderPhotos(p)
         renderPurchaseLinks(links)
         renderTraces()
         renderActions(p)
@@ -749,6 +755,33 @@ class OrderDetailActivity : ComponentActivity() {
         }
         if (p.operateStatus == "cancelled") {
             addInfoRow(dMoreInfo, "取消原因", cancelReasonText(p))
+        }
+    }
+
+    /** 包装照片(2026-11-11,拍照发运):横向缩略图,点击全屏预览 */
+    private fun renderPhotos(p: Pkg) {
+        dPhotoContainer.removeAllViews()
+        val photos = p.photos.orEmpty().filter { !it.photoUrl.isNullOrBlank() }
+        if (photos.isEmpty()) {
+            dPhotoCard.visibility = View.GONE
+            return
+        }
+        dPhotoCard.visibility = View.VISIBLE
+        for (photo in photos) {
+            val url = photo.photoUrl
+            val iv = ImageView(this).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(90), dp(90)).apply {
+                    rightMargin = dp(8)
+                }
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                setBackgroundColor(Color.parseColor("#f2f3f5"))
+                setOnClickListener { showImagePreview(url) }
+            }
+            iv.load(url) {
+                placeholder(ColorDrawable(Color.parseColor("#f2f3f5")))
+                error(ColorDrawable(Color.parseColor("#f2f3f5")))
+            }
+            dPhotoContainer.addView(iv)
         }
     }
 

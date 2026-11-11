@@ -6,11 +6,16 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
+import android.provider.MediaStore
 import android.util.Base64
+import androidx.core.content.FileProvider
+import java.io.ByteArrayOutputStream
+import java.io.File
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
@@ -84,6 +89,10 @@ class ScanShipFragment : Fragment() {
         override fun onRefreshRecords() {
             loadRecords()
         }
+
+        override fun onTakeShipPhoto(pkg: Pkg) {
+            takeShipPhoto(pkg)
+        }
     })
 
     private var currentKeyword = ""
@@ -102,6 +111,21 @@ class ScanShipFragment : Fragment() {
                 searchInput.setText(code)
                 doSearch(code)
             }
+        }
+    }
+
+    // 拍照发运(2026-11-11):系统相机拍照后压缩上传包装照片
+    private var pendingPhotoPkg: Pkg? = null
+    private var pendingPhotoFile: File? = null
+    private val cameraLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val pkg = pendingPhotoPkg ?: return@registerForActivityResult
+        pendingPhotoPkg = null
+        val file = pendingPhotoFile ?: return@registerForActivityResult
+        pendingPhotoFile = null
+        if (result.resultCode == Activity.RESULT_OK && file.exists()) {
+            uploadShipPhoto(pkg, file)
         }
     }
 
@@ -520,6 +544,72 @@ class ScanShipFragment : Fragment() {
         } else {
             toast(e.message ?: "请求失败")
         }
+    }
+
+    // ── 拍照发运(2026-11-11):系统相机拍货件包装 → 压缩 base64 → 上传后台 ──
+    private fun takeShipPhoto(pkg: Pkg) {
+        pendingPhotoPkg = pkg
+        val dir = File(requireContext().cacheDir, "ship_photos").apply { mkdirs() }
+        val file = File(dir, "ship_${System.currentTimeMillis()}.jpg")
+        pendingPhotoFile = file
+        val uri = FileProvider.getUriForFile(requireContext(), "${requireContext().packageName}.fileprovider", file)
+        val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
+            putExtra(MediaStore.EXTRA_OUTPUT, uri)
+            addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        if (intent.resolveActivity(requireContext().packageManager) != null) {
+            cameraLauncher.launch(intent)
+        } else {
+            pendingPhotoPkg = null
+            pendingPhotoFile = null
+            toast("未找到相机应用")
+        }
+    }
+
+    private fun uploadShipPhoto(pkg: Pkg, file: File) {
+        viewLifecycleOwner.lifecycleScope.launch {
+            try {
+                toast("正在上传包装照片…")
+                val b64 = withContext(Dispatchers.IO) { compressAndEncodePhoto(file) }
+                val resp = Api.post(
+                    "/admin/api/order-process/photo-upload",
+                    mapOf(
+                        "storeId" to (pkg.storeId ?: ""),
+                        "packageId" to pkg.id,
+                        "postingNumber" to (pkg.postingNumber ?: ""),
+                        "imageBase64" to b64
+                    )
+                )
+                val url = resp.asJsonObject.optString("photoUrl")
+                toast("包装照片上传成功")
+                // 刷新列表,更新"已拍N张"
+                if (currentKeyword.isNotBlank()) doSearch(currentKeyword) else loadRecords()
+            } catch (e: Exception) {
+                toast("上传失败:${e.message}")
+            }
+        }
+    }
+
+    /** 解码 → 等比压缩到最长边 1600px → JPEG 85 → base64(裸编码,后端兼容) */
+    private fun compressAndEncodePhoto(file: File): String {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, bounds)
+        var sample = 1
+        val maxDim = 1600
+        while ((bounds.outWidth / sample) > maxDim || (bounds.outHeight / sample) > maxDim) {
+            sample *= 2
+        }
+        val bmp = BitmapFactory.decodeFile(file.absolutePath, BitmapFactory.Options().apply { inSampleSize = sample })
+            ?: throw IllegalStateException("图片解码失败")
+        val w = bmp.width
+        val h = bmp.height
+        val scale = if (w >= h) maxDim.toFloat() / w else maxDim.toFloat() / h
+        val out = if (scale < 1f) Bitmap.createScaledBitmap(bmp, (w * scale).toInt(), (h * scale).toInt(), true) else bmp
+        val baos = ByteArrayOutputStream()
+        out.compress(Bitmap.CompressFormat.JPEG, 85, baos)
+        if (out !== bmp) out.recycle()
+        bmp.recycle()
+        return Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
     }
 
     private fun goLogin() {

@@ -732,6 +732,21 @@ CREATE TABLE IF NOT EXISTS op_posting_barcode (
 );
 CREATE INDEX IF NOT EXISTS idx_opb_lower ON op_posting_barcode(store_id, lower_barcode);
 
+-- 货件包装照片(2026-11-11,拍照发运)
+-- 来源:安卓端扫描货件后拍照上传,文件存 public/uploads/pack-photos/{storeId}/{postingNumber}_{ts}.jpg
+-- 用途:拍照发运留证,订单详情页按货件展示包装照片。
+CREATE TABLE IF NOT EXISTS op_package_photo (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  store_id       TEXT NOT NULL,
+  package_id     INTEGER,                      -- 本地包裹 id(op_package.id,可能为空)
+  posting_number TEXT NOT NULL,                -- 货件号
+  photo_url      TEXT NOT NULL,                -- 照片相对 URL(/uploads/pack-photos/...)
+  uploader       TEXT,                         -- 上传账号
+  uploaded_at    TEXT NOT NULL DEFAULT (datetime('now'))  -- 上传时间(UTC)
+);
+CREATE INDEX IF NOT EXISTS idx_op_photo_pkg ON op_package_photo(package_id);
+CREATE INDEX IF NOT EXISTS idx_op_photo_posting ON op_package_photo(store_id, posting_number);
+
 -- 采购订单(1688/拼多多/淘宝)
 CREATE TABLE IF NOT EXISTS op_purchase_order (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
