@@ -3852,6 +3852,31 @@ onUnmounted(() => {
                   <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                 </button>
               </div>
+              <!-- 货件条码(2026-11-11):货件号下一行,格式同货件号,带复制 -->
+              <div v-if="pkg.barcode" class="pkg-tags-meta-line pkg-barcode-line">
+                <span class="mono pkg-barcode">{{ pkg.barcode }}</span>
+                <button class="copy-btn" title="复制条码" @click.stop="copyText(pkg.barcode, '条码')">
+                  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                </button>
+              </div>
+              <!-- 发运单号 + OGL快递单号(2026-11-11):下一行,各自带复制;多发运单并列展示 -->
+              <div v-if="pkg.carriageLinks && pkg.carriageLinks.length" class="pkg-tags-meta-line pkg-carriage-line">
+                <template v-for="(l, i) in pkg.carriageLinks" :key="i">
+                  <span v-if="i > 0" class="pkg-carriage-sep">|</span>
+                  <span class="pkg-ext-label">运单</span>
+                  <span class="mono pkg-carriage-no">{{ l.carriageId }}</span>
+                  <button class="copy-btn" title="复制发运单号" @click.stop="copyText(l.carriageId, '发运单号')">
+                    <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  </button>
+                  <template v-if="l.trackingNumber">
+                    <span class="pkg-ext-label">OGL</span>
+                    <span class="mono pkg-ogl-no">{{ l.trackingNumber }}</span>
+                    <button class="copy-btn" title="复制OGL快递单号" @click.stop="copyText(l.trackingNumber, 'OGL快递单号')">
+                      <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    </button>
+                  </template>
+                </template>
+              </div>
             </td>
             <td colspan="4">
               <span v-for="t in sortTagsByOrder(pkg.tags)" :key="t" class="pkg-tag" :class="[tagColorClass(t), { 'pkg-tag-on': filters.tag === t }]">
@@ -6133,6 +6158,26 @@ a.product-title:hover {
 }
 .pkg-tags-meta-line .copy-btn {
   flex: none;
+}
+/* 2026-11-11:货件号下方扩展行(条码/发运单号/OGL快递单号),行间距 + 前缀标签 */
+.pkg-tags-meta-line + .pkg-tags-meta-line {
+  margin-top: 2px;
+}
+.pkg-ext-label {
+  flex: none;
+  color: #9ca3af;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.pkg-carriage-sep {
+  flex: none;
+  color: #d1d5db;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.pkg-barcode-line .pkg-barcode {
+  color: #6d28d9; /* 条码紫色弱区分,字体同货件号(mono 18px) */
 }
 .pkg-note-row td {
   background: #fffbeb;

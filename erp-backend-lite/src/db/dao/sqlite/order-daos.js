@@ -1159,6 +1159,29 @@ function attachCarriageOglTracking(pkgRows) {
   }
 }
 
+// ── 订单列表附加面单条码(2026-11-11):op_posting_barcode 按 store|posting 批量 join ──
+// 供订单列表货件号下方展示 posting_barcode + 复制(扫描打单条码)。读时派生,失败不影响主流程。
+function attachPostingBarcodes(pkgRows) {
+  if (!pkgRows.length) return;
+  const keys = [...new Set(pkgRows.map((p) => `${p.storeId}|${p.postingNumber}`))];
+  let rows;
+  try {
+    rows = db.prepare(
+      `SELECT store_id || '|' || posting_number AS pkey, lower_barcode
+       FROM op_posting_barcode
+       WHERE (store_id || '|' || posting_number) IN (${keys.map(() => '?').join(',')})
+         AND lower_barcode IS NOT NULL`
+    ).all(...keys);
+  } catch {
+    return;
+  }
+  const byKey = new Map();
+  for (const r of rows) byKey.set(r.pkey, r.lower_barcode);
+  for (const p of pkgRows) {
+    p.barcode = byKey.get(`${p.storeId}|${p.postingNumber}`) || null;
+  }
+}
+
 // ── 跨店大包已发出识别:读时 join 派生(2026-11-07) ──
 // 货件"已随跨店大包发出" ⟺ op_carriage_posting 存在 source='manual' 的活跃行,
 // 且所属发运单(op_carriage_history.status)为 received/delivered/closed(已发出)
@@ -1270,6 +1293,8 @@ function listPackages(filters = {}) {
     attachCrossStoreShippedFlags(pkgRows);
     // OGL 集运仓快递单号:按"货件→发运"读时 join 派生(2026-11-06)
     attachCarriageOglTracking(pkgRows);
+    // 面单条码:op_posting_barcode 读时派生(2026-11-11),货件号下方展示+复制
+    attachPostingBarcodes(pkgRows);
   }
   return {
     total,
