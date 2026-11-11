@@ -161,6 +161,7 @@ class MainShellActivity : FragmentActivity(), TabHost {
                 "health" -> StoreHealthFragment()
                 "stock" -> StockScanFragment()
                 "container" -> ContainerLabelFragment()
+                "shipPhoto" -> ShipPhotoFragment()
                 else -> ScanShipFragment()
             }
         }
