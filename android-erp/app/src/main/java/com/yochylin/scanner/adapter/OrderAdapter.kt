@@ -91,6 +91,7 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
         private val oSplitBadge: TextView = view.findViewById(R.id.oSplitBadge)
         private val oOpTag: TextView = view.findViewById(R.id.oOpTag)
         private val oMetaContainer: LinearLayout = view.findViewById(R.id.oMetaContainer)
+        private val oExtContainer: LinearLayout = view.findViewById(R.id.oExtContainer)
         private val oTags: TextView = view.findViewById(R.id.oTags)
         private val oNote: TextView = view.findViewById(R.id.oNote)
         private val oProdContainer: LinearLayout = view.findViewById(R.id.oProdContainer)
@@ -151,6 +152,9 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
             oOpTag.setTextColor(Color.parseColor(op.second))
             oOpTag.setRoundedBg(Color.parseColor(oSoftBg(op.second)))
             oOpTag.visibility = View.VISIBLE
+
+            // 货件扩展信息(2026-11-11,对齐 Web):二维码 + 发运单/OGL 快递单号
+            bindExtInfo(pkg)
 
             // 标签/备注(2026-10-27,对齐 Web 行内编辑):常驻灰条展示,点击弹窗编辑
             val tags = pkg.tags?.filter { it.isNotBlank() }.orEmpty()
@@ -243,6 +247,84 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
 
             // 时间行
             buildTimeRows(pkg)
+        }
+
+        /**
+         * 货件扩展信息(2026-11-11,对齐 Web 订单处理页):
+         * - 二维码行:op_posting_barcode 面单条码(紫色 mono)+ 复制
+         * - 发运单行:每个活跃发运关联一行,发运单号 + OGL 快递单号,各自带复制
+         * 有任一内容才显示容器。
+         */
+        private fun bindExtInfo(pkg: Pkg) {
+            oExtContainer.removeAllViews()
+            var hasAny = false
+
+            val barcode = pkg.barcode?.trim().orEmpty()
+            if (barcode.isNotEmpty()) {
+                addExtRow("二维码", listOf(ExtValue(barcode, "二维码", 0xFF6D28D9.toInt())))
+                hasAny = true
+            }
+
+            // 发运单:carriageLinks 由后端读时 join 派生(跨店大包实际发出 + Ozon 补登记)
+            val links = pkg.carriageLinks.orEmpty().filter { !it.trackingNumber.isNullOrBlank() }
+            for (l in links) {
+                val values = mutableListOf<ExtValue>()
+                val carriageId = l.carriageId?.toString().orEmpty()
+                if (carriageId.isNotEmpty()) {
+                    values.add(ExtValue(carriageId, "发运单号"))
+                }
+                val tracking = l.trackingNumber.orEmpty()
+                values.add(ExtValue(tracking, "OGL 快递单号"))
+                addExtRow("发运单", values)
+                hasAny = true
+            }
+
+            oExtContainer.visibility = if (hasAny) View.VISIBLE else View.GONE
+        }
+
+        /** 扩展信息行:label 固定宽 + 若干值(mono),带可选复制按钮 */
+        private fun addExtRow(label: String, values: List<ExtValue>) {
+            val row = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val labelTv = TextView(context).apply {
+                text = label
+                setTextColor(Color.parseColor(O_COLOR_MUTE))
+                textSize = 11f
+                typeface = Typeface.DEFAULT_BOLD
+            }
+            row.addView(labelTv, LinearLayout.LayoutParams(48.dp2px(context), ViewGroup.LayoutParams.WRAP_CONTENT))
+
+            for (v in values) {
+                val valueTv = TextView(context).apply {
+                    text = v.text
+                    setTextColor(v.color)
+                    textSize = 11f
+                    typeface = Typeface.MONOSPACE
+                }
+                row.addView(valueTv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    leftMargin = 4.dp2px(context)
+                })
+
+                val copyLabel = v.copyLabel
+                if (!copyLabel.isNullOrBlank()) {
+                    val copyTv = TextView(context).apply {
+                        text = "复制"
+                        textSize = 10f
+                        setTextColor(Color.parseColor("#165dff"))
+                        setRoundedBg(Color.parseColor("#eef4ff"), 4f)
+                        setPadding(8.dp2px(context), 2.dp2px(context), 8.dp2px(context), 2.dp2px(context))
+                    }
+                    copyTv.setOnClickListener { callbacks.onCopy(v.text, copyLabel) }
+                    row.addView(copyTv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        leftMargin = 6.dp2px(context)
+                    })
+                }
+            }
+            oExtContainer.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = 2.dp2px(context)
+            })
         }
 
         private fun bindPurchaseLogistics(pkg: Pkg) {
@@ -631,6 +713,13 @@ fun countdownText(shipmentDate: String?): Countdown {
     }
     return Countdown(overdue, overdue || diff < 86400000L, text)
 }
+
+/** 扩展信息行值(2026-11-11):text=显示即复制文本, copyLabel=复制提示标签, color=文字颜色 */
+private data class ExtValue(
+    val text: String,
+    val copyLabel: String?,
+    val color: Int = Color.parseColor(O_COLOR_TEXT),
+)
 
 private fun Int.dp2px(context: Context): Int {
     return (this * context.resources.displayMetrics.density + 0.5f).toInt()

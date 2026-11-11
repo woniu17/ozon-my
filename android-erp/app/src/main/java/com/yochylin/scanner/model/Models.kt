@@ -84,6 +84,20 @@ data class Pkg(
     val cancelReason: String? = null,
     val cancelledAfterShip: Boolean? = null,  // 取消发生在发货后(true=发货后取消,false=发货前取消;仅 cancelled 状态有)
     val splitAnalysis: SplitAnalysis? = null, // OGL 拆包省钱分析(2026-11)
+    // ── 货件面单条码 + 发运关联(2026-11-11,后端读时 join,对齐 Web 订单处理页) ──
+    val barcode: String? = null,              // 面单二维码(op_posting_barcode lower_barcode)
+    val headLogisticsNo: String? = null,      // OGL 国内集运仓快递单号(发运单派生)
+    val headLogisticsCompany: String? = null, // 快递公司(有单号时固定"圆通速递")
+    val carriageLinks: List<CarriageLink>? = null, // 活跃发运关联(跨店大包实际发出 + Ozon 补登记)
+)
+
+/** 货件-发运关联(2026-11-11,op_carriage_posting JOIN op_carriage_history 派生) */
+data class CarriageLink(
+    val carriageId: Long? = null,     // 发运单号
+    val source: String? = null,       // manual=实际发出大包 / ozon=Ozon 补登记
+    val carriageStatus: String? = null, // 发运单状态(formed/received/delivered/closed...)
+    val trackingNumber: String? = null, // OGL 快递单号
+    val addedAt: String? = null,      // 加入时间
 )
 
 // OGL 拆包省钱分析(2026-11):后端 /order-process/list 与 /detail 返回,同 SKU 多件订单拆包运费对比

@@ -67,6 +67,15 @@
             android:paddingVertical="2dp" />
     </LinearLayout>
 
+    <!-- 货件扩展信息(2026-11-11,对齐 Web 订单处理页):二维码 + 发运单/OGL 快递单号,动态填充 -->
+    <LinearLayout
+        android:id="@+id/oExtContainer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:orientation="vertical"
+        android:visibility="gone" />
+
     <!-- 标签/备注区(2026-10-27,对齐 Web 行内编辑:展示+点击编辑) -->
     <LinearLayout
         android:id="@+id/oMetaContainer"
