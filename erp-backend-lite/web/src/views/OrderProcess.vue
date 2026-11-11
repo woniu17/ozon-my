@@ -4107,17 +4107,32 @@ onUnmounted(() => {
               <div class="amt-row sub" title="成本利润率 = 利润 / 采购金额"><span class="amt-name">成本利润率</span><span class="amt-val">{{ fmtRate(pkg.profit?.profitRateCost) }}</span></div>
             </td>
             <td class="col-status">
-              <div>
-                <!-- 搁置徽标(与 miniapp H5 同口径):isIgnored=true 时显示,提示该包裹被人工搁置 -->
-                <span v-if="pkg.isIgnored" class="tag tag-mute" style="margin-right: 4px" title="已搁置的包裹:不参与流转,可在「更多」菜单中恢复">搁置</span>
-                <!-- 全局搜索模式:显示包裹所属操作状态(跨tab辨识) -->
-                <span v-if="globalSearch.active" class="tag" :class="operateTag(pkg).cls" style="margin-right: 4px" title="包裹所属状态">{{ operateTag(pkg).label }}</span>
-                <!-- Ozon状态展示原始值(如 awaiting_deliver),中文释义放悬浮提示 -->
-                <span class="tag mono" :class="pkg.ozonStatus === 'cancelled' ? 'tag-err' : 'tag-mute'" :title="ozonStatus(pkg.ozonStatus) + (pkg.substatus ? '(' + pkg.substatus + ')' : '')">{{ pkg.ozonStatus || '—' }}</span>
-                <!-- 跨店大包已发出(2026-11-07):已随跨店大包发出,后续发运/打单均为 Ozon 补登记 -->
-                <span v-if="pkg.crossStoreShipped" class="tag tag-info" style="margin-left: 4px" :title="crossStoreShippedTitle(pkg)">已随 {{ pkg.crossStoreShipped.carriageId }} 大包{{ pkg.crossStoreShipped.carriageStatus === 'formed' ? '创建发运' : '发出' }}</span>
-                <span :class="purchaseTag(pkg).cls" style="margin-left: 4px">{{ purchaseTag(pkg).label }}</span>
-                <span v-if="arrivedTag(pkg)" :class="arrivedTag(pkg).cls" style="margin-left: 4px">{{ arrivedTag(pkg).label }}</span>
+              <!-- 状态按行展示(2026-11-11):第一行采购 → 第二行Ozon物流 → 第三行跨店大包 → 第四行到货 -->
+              <div class="status-lines">
+                <!-- 第一行:采购状态 -->
+                <div class="status-line">
+                  <span class="status-label">采购</span>
+                  <span :class="purchaseTag(pkg).cls">{{ purchaseTag(pkg).label }}</span>
+                  <!-- 搁置徽标(与 miniapp H5 同口径):isIgnored=true 时显示,提示该包裹被人工搁置 -->
+                  <span v-if="pkg.isIgnored" class="tag tag-mute" title="已搁置的包裹:不参与流转,可在「更多」菜单中恢复">搁置</span>
+                  <!-- 全局搜索模式:显示包裹所属操作状态(跨tab辨识) -->
+                  <span v-if="globalSearch.active" class="tag" :class="operateTag(pkg).cls" title="包裹所属状态">{{ operateTag(pkg).label }}</span>
+                </div>
+                <!-- 第二行:Ozon 物流状态(展示原始值,中文释义放悬浮提示) -->
+                <div class="status-line">
+                  <span class="status-label">Ozon</span>
+                  <span class="tag mono" :class="pkg.ozonStatus === 'cancelled' ? 'tag-err' : 'tag-mute'" :title="ozonStatus(pkg.ozonStatus) + (pkg.substatus ? '(' + pkg.substatus + ')' : '')">{{ pkg.ozonStatus || '—' }}</span>
+                </div>
+                <!-- 第三行:跨店打包标记(2026-11-07):已随跨店大包发出,后续发运/打单均为 Ozon 补登记 -->
+                <div v-if="pkg.crossStoreShipped" class="status-line">
+                  <span class="status-label">大包</span>
+                  <span class="tag tag-info" :title="crossStoreShippedTitle(pkg)">已随 {{ pkg.crossStoreShipped.carriageId }} 大包{{ pkg.crossStoreShipped.carriageStatus === 'formed' ? '创建发运' : '发出' }}</span>
+                </div>
+                <!-- 第四行:到货状态 -->
+                <div v-if="arrivedTag(pkg)" class="status-line">
+                  <span class="status-label">到货</span>
+                  <span :class="arrivedTag(pkg).cls">{{ arrivedTag(pkg).label }}</span>
+                </div>
               </div>
               <!-- OGL 国内集运仓快递单号(2026-11-06 读时 join):单号属于发运单,按"货件→发运"派生展示;
                    跨店大包+补登记场景同时显示全部发运单(运单号+快递单号),实际发出大包(manual)与补登记(ozon)分色(2026-11-08) -->
@@ -5764,6 +5779,25 @@ a.product-title:hover {
 .col-status {
   /* 2026-09-20:加宽保证时间四行(下单/揽收/签收/退货)及取消原因行不折行 */
   min-width: 250px;
+  white-space: nowrap;
+}
+/* 状态按行展示(2026-11-11):采购 → Ozon物流 → 跨店大包 → 到货,每行带灰色前缀 */
+.status-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.status-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.status-label {
+  flex: none;
+  color: #9ca3af;
+  font-size: 12px;
+  font-weight: 600;
   white-space: nowrap;
 }
 
