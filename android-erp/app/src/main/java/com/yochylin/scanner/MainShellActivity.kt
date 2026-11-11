@@ -2,6 +2,7 @@ package com.yochylin.scanner
 
 import android.Manifest
 import android.app.AlertDialog
+import android.app.DownloadManager
 import android.app.ProgressDialog
 import android.content.ContentValues
 import android.content.Context
@@ -232,13 +233,17 @@ class MainShellActivity : FragmentActivity(), TabHost {
         AlertDialog.Builder(this)
             .setTitle("发现新版本 v$versionName")
             .setMessage("检测到新版本，是否立即下载更新？\n当前版本：v${BuildConfig.VERSION_NAME}")
-            .setPositiveButton("立即更新") { _, _ -> startDownload(url) }
+            .setPositiveButton("立即更新") { _, _ -> startDownload(url, versionName) }
             .setNegativeButton("稍后", null)
             .show()
     }
 
-    private fun startDownload(url: String) {
-        // Android 9 及以下写公共 Download 目录需要存储权限；10+ 用 MediaStore 无需权限
+    private fun startDownload(url: String, versionName: String) {
+        // 优先使用系统下载工具(DownloadManager)：下载在系统通知栏可见、完成后点击通知即可安装。
+        // 内网时系统 DNS 无法解析自定义域名(yochylin.com→内网 IP),改用内网 IP + HTTP 端口直连绕过。
+        if (enqueueSystemDownload(url, versionName)) return
+
+        // 回退：App 内 OkHttp 下载（含自定义 DNS,下载到公共 Download/ScannerShip 目录并引导手动安装）
         if (Build.VERSION.SDK_INT <= 28 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
         ) {
@@ -247,6 +252,39 @@ class MainShellActivity : FragmentActivity(), TabHost {
             return
         }
         doDownload(url)
+    }
+
+    /** 用系统 DownloadManager 下载更新包；返回是否成功发起 */
+    private fun enqueueSystemDownload(url: String, versionName: String): Boolean {
+        return try {
+            // Android 9 及以下写公共 Download 目录需要存储权限，未授权时回退 App 内下载（由其申请权限）
+            if (Build.VERSION.SDK_INT <= 28 &&
+                ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
+            ) {
+                return false
+            }
+            val fileName = url.substringAfterLast('/')
+            // 内网：系统 DownloadManager 不走 App 自定义 DNS，改用内网 IP + HTTP 端口直连（不依赖域名解析/证书）
+            val dlUrl = if (Session.useIntranet) {
+                "http://${NetworkDetector.INTRANET_HOST}:3001/miniapp/$fileName"
+            } else {
+                url
+            }
+            val request = DownloadManager.Request(Uri.parse(dlUrl))
+                .setTitle("Ozon ERP 更新包 v$versionName")
+                .setDescription("下载完成后点击通知即可安装")
+                .setMimeType("application/vnd.android.package-archive")
+                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "ScannerShip/scanner-ship.apk")
+                .setAllowedOverMetered(true)
+                .setAllowedOverRoaming(true)
+            val dm = getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager ?: return false
+            dm.enqueue(request)
+            Toast.makeText(this, "已开始下载，请在通知栏查看进度并点击安装", Toast.LENGTH_LONG).show()
+            true
+        } catch (e: Exception) {
+            false
+        }
     }
 
     private fun doDownload(url: String) {
