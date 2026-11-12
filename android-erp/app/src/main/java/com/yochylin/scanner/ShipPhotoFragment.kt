@@ -10,6 +10,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.net.Uri
@@ -27,6 +28,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -43,6 +45,7 @@ import androidx.core.content.FileProvider
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import coil.load
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
@@ -422,7 +425,8 @@ class ShipPhotoFragment : Fragment() {
         pendingCount++
         val rec = RecordEntry(
             RecordStatus.PENDING, code, pkg.id, pkg.postingNumber,
-            "等待拍照…", pkg.storeName, pkg.storeId
+            "等待拍照…", pkg.storeName, pkg.storeId,
+            picUrl = pkg.items?.firstOrNull()?.picUrl
         )
         addRecord(rec)
         reportLog(
@@ -457,7 +461,11 @@ class ShipPhotoFragment : Fragment() {
     private fun uploadShipPhoto(pkg: Pkg, file: File, rec: RecordEntry?) {
         viewLifecycleOwner.lifecycleScope.launch {
             try {
-                if (rec != null) replaceRecord(rec.copy(status = RecordStatus.PENDING, message = "正在上传照片…"))
+                if (rec != null) replaceRecord(rec.copy(
+                    status = RecordStatus.PENDING,
+                    message = "正在上传照片…",
+                    filePath = file.absolutePath
+                ))
                 val b64 = withContext(Dispatchers.IO) { compressAndEncodePhoto(file) }
                 val resp = Api.post(
                     "/admin/api/order-process/photo-upload",
@@ -472,7 +480,12 @@ class ShipPhotoFragment : Fragment() {
                 pendingCount = (pendingCount - 1).coerceAtLeast(0)
                 successCount++
                 if (rec != null) {
-                    replaceRecord(rec.copy(status = RecordStatus.SUCCESS, message = "包装照片上传成功"))
+                    replaceRecord(rec.copy(
+                        status = RecordStatus.SUCCESS,
+                        message = "包装照片上传成功",
+                        photoUrl = url,
+                        filePath = file.absolutePath // 保留本地文件,photoUrl 加载失败时可回退预览
+                    ))
                 }
                 playFeedback(true)
                 reportLog(
@@ -724,37 +737,82 @@ class ShipPhotoFragment : Fragment() {
             }
         }
 
+        // 左侧:商品图片(取货件第一个商品图)
+        val productImg = ImageView(ctx).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(48), dp(48))
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            setBackgroundColor(Color.parseColor("#f2f3f5"))
+        }
+        if (!record.picUrl.isNullOrBlank()) {
+            productImg.load(record.picUrl) {
+                placeholder(ColorDrawable(Color.parseColor("#f2f3f5")))
+                error(ColorDrawable(Color.parseColor("#f2f3f5")))
+            }
+            productImg.setOnClickListener { requireContext().showImagePreview(record.picUrl) }
+        }
+
+        // 右侧:拍照图片(上传成功后用服务器地址,否则用本地拍照文件)
+        val photoImg = ImageView(ctx).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(48), dp(48))
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            setBackgroundColor(Color.parseColor("#f2f3f5"))
+        }
+        val photoSource = photoDisplaySource(record)
+        if (photoSource != null) {
+            photoImg.load(photoSource) {
+                placeholder(ColorDrawable(Color.parseColor("#f2f3f5")))
+                error(ColorDrawable(Color.parseColor("#f2f3f5")))
+            }
+            photoImg.setOnClickListener { requireContext().showImagePreview(photoSource) }
+        }
+
+        val hasPackage = record.packageId.isNotBlank()
         val row = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, dp(8), 0, dp(8))
+            if (hasPackage) {
+                addView(productImg, LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { rightMargin = dp(8) })
+            }
             addView(TextView(ctx).apply {
                 text = record.status.emoji
                 textSize = 16f
             }, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { rightMargin = dp(8) })
+            ).apply { rightMargin = dp(4) })
             addView(textCol, LinearLayout.LayoutParams(
                 0,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 1f
             ))
-            if (record.status == RecordStatus.FAILED && record.packageId.isNotBlank()) {
+            if (record.status == RecordStatus.FAILED && hasPackage) {
                 addView(TextView(ctx).apply {
                     text = "重试"
                     textSize = 12f
                     setTextColor(Color.WHITE)
                     setTypeface(null, Typeface.BOLD)
-                    setPadding(dp(12), dp(5), dp(12), dp(5))
+                    setPadding(dp(10), dp(5), dp(10), dp(5))
                     setRoundedBg(0xFF165DFF.toInt(), 8f)
                     setOnClickListener { retryUpload(record) }
                 }, LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { leftMargin = dp(8) })
+                ).apply {
+                    leftMargin = dp(8)
+                    rightMargin = dp(8)
+                })
             }
-            if (record.packageId.isNotBlank() && record.status == RecordStatus.SUCCESS) {
+            if (hasPackage) {
+                addView(photoImg, LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { leftMargin = if (record.status == RecordStatus.FAILED) 0 else dp(8) })
+            }
+            if (hasPackage && record.status == RecordStatus.SUCCESS) {
                 setOnClickListener {
                     startActivity(Intent(requireContext(), OrderDetailActivity::class.java)
                         .putExtra("packageId", record.packageId))
@@ -772,6 +830,16 @@ class ShipPhotoFragment : Fragment() {
             dp(1)
         ))
         recordScroll.post { recordScroll.smoothScrollTo(0, 0) }
+    }
+
+    /** 记录行右侧拍照图来源:优先已上传的服务器地址,否则用本地拍照文件 */
+    private fun photoDisplaySource(record: RecordEntry): String? {
+        record.photoUrl?.takeIf { it.isNotBlank() }?.let { return Api.BASE_URL + it }
+        record.filePath?.let { path ->
+            val f = File(path)
+            if (f.exists()) return Uri.fromFile(f).toString()
+        }
+        return null
     }
 
     // ── 生命周期(防后台误扫) ──
@@ -830,7 +898,9 @@ class ShipPhotoFragment : Fragment() {
         val message: String,
         val storeName: String? = null,
         val storeId: String? = null,
-        val filePath: String? = null, // 上传失败后重试直接重传
+        val filePath: String? = null, // 本地拍照文件路径(上传成功后也保留,可作临时预览)
+        val picUrl: String? = null,   // 商品图片(Ozon 商品图,记录行左侧展示)
+        val photoUrl: String? = null, // 上传后的包装照片相对路径(/uploads/pack-photos/...,记录行右侧展示)
         val time: Long = System.currentTimeMillis()
     )
 }
