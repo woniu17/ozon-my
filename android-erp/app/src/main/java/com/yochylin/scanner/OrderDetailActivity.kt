@@ -768,7 +768,8 @@ class OrderDetailActivity : ComponentActivity() {
         }
         dPhotoCard.visibility = View.VISIBLE
         for (photo in photos) {
-            val url = photo.photoUrl
+            // photoUrl 是后端相对路径(/uploads/pack-photos/...)，必须拼 BASE_URL 才能被 Coil 加载
+            val url = photo.photoUrl?.let { Api.BASE_URL + it }
             val iv = ImageView(this).apply {
                 layoutParams = LinearLayout.LayoutParams(dp(90), dp(90)).apply {
                     rightMargin = dp(8)
