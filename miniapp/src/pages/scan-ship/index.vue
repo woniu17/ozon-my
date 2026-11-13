@@ -121,6 +121,17 @@
           <view v-if="profitCalc(pkg).rates" class="formula sub">{{ profitCalc(pkg).rates }}</view>
         </view>
 
+        <!-- OGL 运费/拆包提示(2026-11,对齐订单处理页):展示整件运费,可拆订单对比拆包省/贵 -->
+        <view
+          v-if="pkg.splitAnalysis?.applicable"
+          class="split-save-bar"
+          :class="'split-' + splitCls(pkg)"
+          @click.stop="goDetail(pkg)"
+        >
+          <text class="split-save-text">{{ splitText(pkg) }}</text>
+          <text class="split-save-note" :class="{ active: splitNoteActive(pkg) }">{{ splitNote(pkg) }}</text>
+        </view>
+
         <!-- ── 操作区 ── -->
         <view class="card-actions">
           <!-- 未入库:入库 -->
@@ -1004,6 +1015,40 @@ function recomputeProfitByWeight(pkg, g) {
   p.profitRateCost = purchase > 0 ? Math.round((profit / purchase) * 10000) / 100 : null;
 }
 
+// ── OGL 运费/拆包提示(2026-11,对齐订单处理页):所有 OGL 订单展示整件运费,可拆订单对比拆包省/贵 ──
+function splitCls(pkg) {
+  const sa = pkg.splitAnalysis;
+  if (!sa || !sa.splitEligible) return 'info';
+  return isSplitSaving(sa) ? 'save' : 'worse';
+}
+function splitText(pkg) {
+  const sa = pkg.splitAnalysis;
+  if (!sa) return '';
+  if (!sa.splitEligible) return `整件运费 ${fmtMoney(sa.whole?.deliveryCny)}`;
+  if (isSplitSaving(sa)) return `拆${sa.packagesCount}包省 ${fmtMoney(sa.saveCny)}`;
+  return `整件更省 · 拆${sa.packagesCount}包贵 ${fmtMoney(Math.abs(sa.saveCny || 0))}`;
+}
+// 拆包是否省钱:后端 saving 与 saveCny 同源,这里再防御一次(saveCny<=0 视为不省)
+function isSplitSaving(sa) {
+  return !!sa && sa.saving === true && (sa.saveCny || 0) > 0;
+}
+function splitNote(pkg) {
+  const sa = pkg.splitAnalysis;
+  if (!sa) return '';
+  if (!sa.splitEligible) {
+    return sa.reason === 'single_unit' ? '单件' : sa.reason === 'multi_sku' ? '多SKU' : sa.reason === 'too_many_units' ? '件数过多' : '不可拆';
+  }
+  return sa.operable ? '可拆包' : '已发货';
+}
+function splitNoteActive(pkg) {
+  const sa = pkg.splitAnalysis;
+  return !!(sa && sa.splitEligible && sa.operable);
+}
+// 点击拆包提示跳转订单详情(与订单处理页同入口)
+function goDetail(pkg) {
+  uni.navigateTo({ url: '/pages/order-detail/index?id=' + pkg.id });
+}
+
 // 最迟交运剩余时间(颜色分级:已超时=红 / <24h=红 / <48h=橙)
 function shipRemainCls(pkg) {
   if (!pkg.lastDeliveryAt) return '';
@@ -1558,6 +1603,56 @@ onPullDownRefresh(async () => {
 }
 .profit-pos { color: #00b42a !important; }
 .profit-neg { color: #f53f3f !important; }
+
+/* OGL 运费/拆包提示(2026-11,对齐订单处理页):绿=拆包省,橙=拆包贵,灰=不可拆只展示整件 */
+.split-save-bar {
+  margin-top: 14rpx;
+  padding: 10rpx 16rpx;
+  border-radius: 10rpx;
+  display: flex;
+  align-items: center;
+}
+.split-save-bar.split-save {
+  background: #e8ffea;
+  border: 1rpx solid #b7f0c0;
+}
+.split-save-bar.split-worse {
+  background: #fff7ed;
+  border: 1rpx solid #fed7aa;
+}
+.split-save-bar.split-info {
+  background: #f4f5f7;
+  border: 1rpx solid #e5e6eb;
+}
+.split-save-text {
+  font-size: 24rpx;
+  font-weight: 600;
+  flex: 1;
+}
+.split-save-bar.split-save .split-save-text {
+  color: #0b7a2d;
+}
+.split-save-bar.split-worse .split-save-text {
+  color: #d97706;
+}
+.split-save-bar.split-info .split-save-text {
+  color: #4e5969;
+}
+.split-save-note {
+  font-size: 20rpx;
+  color: #86909c;
+  padding: 2rpx 12rpx;
+  border-radius: 999rpx;
+  background: #f2f3f5;
+}
+.split-save-bar.split-save .split-save-note.active {
+  color: #0b7a2d;
+  background: #d3f5d9;
+}
+.split-save-bar.split-worse .split-save-note.active {
+  color: #d97706;
+  background: #ffedd5;
+}
 
 /* ── 操作区 ── */
 .card-actions {
