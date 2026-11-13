@@ -1688,6 +1688,7 @@ class OrderDetailActivity : ComponentActivity() {
     // ── 操作条 ──
     private fun renderActions(p: Pkg) {
         dActionBar.removeAllViews()
+        setActionBarWide(false) // 默认按内容宽度排列(可滚动)
 
         // 采购（进入三步采购流程;统一文案为"采购",不再区分编辑/新增）
         val launchPurchase = {
@@ -1701,17 +1702,19 @@ class OrderDetailActivity : ComponentActivity() {
             return
         }
 
-        // 待采集(待采购)订单:采购为蓝底白字主按钮(2026-11-08)
-        val isWaitProcess = p.operateStatus == "wait_process"
+        // 2026-11-13:待采购订单仅"搁置+采购"两个按钮,参考采购管理"保存并入库/保存"等宽占满一行
+        if (p.operateStatus == "wait_process") {
+            setActionBarWide(true)
+            dActionBar.addView(wideActionButton("搁置", "#f2f3f5", COLOR_TEXT) { onIgnore(p) })
+            dActionBar.addView(wideActionButton("采购", COLOR_PRIMARY, "#ffffff") { launchPurchase() })
+            return
+        }
 
         // 搁置统一放在最左(2026-11-08)
         dActionBar.addView(actionButton("搁置") { onIgnore(p) })
 
-        // 采购(待采集状态为主按钮蓝底白字)
-        dActionBar.addView(
-            if (isWaitProcess) primaryActionButton("采购", launchPurchase)
-            else actionButton("采购", launchPurchase)
-        )
+        // 采购(非待采购状态为普通按钮)
+        dActionBar.addView(actionButton("采购", launchPurchase))
 
         // 待入库(可入库):同步物流 + 入库(入库最右);待打单:同步物流(2026-11-08)
         val stockableOzonStatuses = setOf("awaiting_packaging", "awaiting_registration", "awaiting_deliver")
@@ -1785,6 +1788,31 @@ class OrderDetailActivity : ComponentActivity() {
             layoutParams = lp
             setOnClickListener { onClick() }
         }
+    }
+
+    /** 等宽按钮(2026-11-13,参考采购管理"保存并入库/保存",两个按钮几乎占满一行) */
+    private fun wideActionButton(text: String, bgColor: String, textColor: String, onClick: () -> Unit): TextView {
+        return TextView(this).apply {
+            this.text = text
+            setTextColor(Color.parseColor(textColor))
+            textSize = 15f
+            gravity = Gravity.CENTER
+            setRoundedBg(Color.parseColor(bgColor), 10f)
+            setPadding(dp(16), dp(13), dp(16), dp(13))
+            val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                leftMargin = dp(6)
+                rightMargin = dp(6)
+            }
+            layoutParams = lp
+            setOnClickListener { onClick() }
+        }
+    }
+
+    /** 操作条是否等宽铺满一行(待采购订单的"搁置+采购"两个按钮,2026-11-13) */
+    private fun setActionBarWide(wide: Boolean) {
+        val lp = dActionBar.layoutParams
+        lp.width = if (wide) ViewGroup.LayoutParams.MATCH_PARENT else ViewGroup.LayoutParams.WRAP_CONTENT
+        dActionBar.layoutParams = lp
     }
 
     /** 详情页主操作按钮：蓝底白字(待采集/待采购订单的采购按钮,2026-11-08) */
