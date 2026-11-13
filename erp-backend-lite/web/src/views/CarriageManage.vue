@@ -1769,7 +1769,8 @@ defineExpose({ refreshCurrent, listLoading });
             >
               {{ editPostings.saving ? '保存中…' : '保存货件' }}
             </button>
-            <button v-if="postingsEditable" class="btn btn-ghost btn-sm" @click="onOpenCandidate">添加货件</button>
+            <!-- 2026-11-13:已形成(formed)发运单同样允许添加货件 -->
+            <button v-if="postingsEditable || detail.carriage.status === 'formed'" class="btn btn-ghost btn-sm" @click="onOpenCandidate">添加货件</button>
             <button v-if="detail.fromHistory" class="btn btn-ghost btn-sm" @click="onOpenCandidate">添加漏掉的订单</button>
             <button
               v-if="!detail.fromHistory"
