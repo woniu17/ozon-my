@@ -60,6 +60,32 @@
             android:layout_marginTop="2dp" />
     </LinearLayout>
 
+    <!-- 拍照建包(2026-11-12 第 3 个 Tab,独立连扫拍照上传;2026-11-13 由"拍照建包"改名并移至发运管理前) -->
+    <LinearLayout
+        android:id="@+id/navShipPhoto"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:background="@android:color/transparent">
+
+        <ImageView
+            android:id="@+id/navShipPhotoIcon"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:src="@drawable/ic_nav_photo" />
+
+        <TextView
+            android:id="@+id/navShipPhotoText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="拍照建包"
+            android:textSize="10sp"
+            android:textColor="#86909c"
+            android:layout_marginTop="2dp" />
+    </LinearLayout>
+
     <!-- 发运管理(2026-11-02 由"货运标签"升级) -->
     <LinearLayout
         android:id="@+id/navContainer"
@@ -81,32 +107,6 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="发运管理"
-            android:textSize="10sp"
-            android:textColor="#86909c"
-            android:layout_marginTop="2dp" />
-    </LinearLayout>
-
-    <!-- 拍照发运(2026-11-12 第 4 个 Tab,独立连扫拍照上传) -->
-    <LinearLayout
-        android:id="@+id/navShipPhoto"
-        android:layout_width="0dp"
-        android:layout_height="match_parent"
-        android:layout_weight="1"
-        android:orientation="vertical"
-        android:gravity="center"
-        android:background="@android:color/transparent">
-
-        <ImageView
-            android:id="@+id/navShipPhotoIcon"
-            android:layout_width="24dp"
-            android:layout_height="24dp"
-            android:src="@drawable/ic_nav_photo" />
-
-        <TextView
-            android:id="@+id/navShipPhotoText"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="拍照发运"
             android:textSize="10sp"
             android:textColor="#86909c"
             android:layout_marginTop="2dp" />

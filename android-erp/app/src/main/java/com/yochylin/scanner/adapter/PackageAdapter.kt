@@ -50,7 +50,7 @@ class PackageAdapter(private val callbacks: Callbacks) :
         fun onPrintLabel(pkg: Pkg)
         fun onPreviewLabel(pkg: Pkg)
         fun onCorrectWeight(pkg: Pkg, weightG: Int)
-        /** 拍照发运(2026-11-11):调起相机拍货件包装并上传后台 */
+        /** 拍照建包(2026-11-11):调起相机拍货件包装并上传后台 */
         fun onTakeShipPhoto(pkg: Pkg)
         fun onSwitchRecordTab(tab: String)
         fun onRefreshRecords()
@@ -417,11 +417,11 @@ class PackageAdapter(private val callbacks: Callbacks) :
                 actionArea.addView(newSectionLabel(reason))
             }
 
-            // 拍照发运(2026-11-11):拍照上传货件包装照片,详情页可查看
+            // 拍照建包(2026-11-11):拍照上传货件包装照片,详情页可查看
             val photoCount = pkg.photos?.size ?: 0
             val photoRow = buildWeightRow()
             photoRow.addView(newRowButton(
-                if (photoCount > 0) "拍照发运 · 已拍${photoCount}张" else "拍照发运",
+                if (photoCount > 0) "拍照建包 · 已拍${photoCount}张" else "拍照建包",
                 Color.parseColor("#6d28d9")
             ) {
                 callbacks.onTakeShipPhoto(pkg)

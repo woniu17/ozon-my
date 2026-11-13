@@ -131,13 +131,13 @@
         android:textColor="@color/text_muted"
         android:textSize="12sp" />
 
-    <!-- 下半部分:本次拍照发运记录列表 -->
+    <!-- 下半部分:本次拍照建包记录列表 -->
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:paddingHorizontal="12dp"
         android:paddingTop="8dp"
-        android:text="本次拍照发运记录"
+        android:text="本次拍照建包记录"
         android:textColor="@color/text_primary"
         android:textSize="13sp"
         android:textStyle="bold" />

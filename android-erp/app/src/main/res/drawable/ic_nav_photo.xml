@@ -3,7 +3,7 @@
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
-    <!-- 拍照发运:相机机身 + 顶部快门 -->
+    <!-- 拍照建包:相机机身 + 顶部快门 -->
     <path
         android:fillColor="@android:color/transparent"
         android:strokeColor="#86909c"

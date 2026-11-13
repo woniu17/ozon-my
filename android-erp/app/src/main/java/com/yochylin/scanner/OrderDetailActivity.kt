@@ -93,7 +93,7 @@ class OrderDetailActivity : ComponentActivity() {
     private lateinit var dMoreInfo: LinearLayout
     private lateinit var dProdTitle: TextView
     private lateinit var dProdContainer: LinearLayout
-    private lateinit var dPhotoCard: LinearLayout  // 包装照片卡片(2026-11-11,拍照发运)
+    private lateinit var dPhotoCard: LinearLayout  // 包装照片卡片(2026-11-11,拍照建包)
     private lateinit var dPhotoContainer: LinearLayout
     private lateinit var dPoTitle: TextView
     private lateinit var dPoContainer: LinearLayout
@@ -758,7 +758,7 @@ class OrderDetailActivity : ComponentActivity() {
         }
     }
 
-    /** 包装照片(2026-11-11,拍照发运):横向缩略图,点击全屏预览 */
+    /** 包装照片(2026-11-11,拍照建包):横向缩略图,点击全屏预览 */
     private fun renderPhotos(p: Pkg) {
         dPhotoContainer.removeAllViews()
         val photos = p.photos.orEmpty().filter { !it.photoUrl.isNullOrBlank() }

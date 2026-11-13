@@ -32,6 +32,8 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import com.yochylin.scanner.adapter.PackageAdapter
 import com.yochylin.scanner.api.Api
 import com.yochylin.scanner.api.ApiException
@@ -99,8 +101,43 @@ class ScanShipFragment : Fragment() {
     private var currentTab = "today"
     private var results: List<Pkg> = emptyList()
     private var records: List<Pkg> = emptyList()
+    private var todayRecords: List<Pkg> = emptyList()    // 本地缓存用(2026-11-13)
+    private var yesterdayRecords: List<Pkg> = emptyList() // 本地缓存用(2026-11-13)
     private var countToday = 0
     private var countYesterday = 0
+
+    // ── 打单记录本地缓存(2026-11-13):最近 100 条,重启先显示缓存再刷新后端 ──
+    private val recordCacheGson = Gson()
+    private val recordCacheLimit = 100
+    private fun recordCachePrefs() = requireContext().getSharedPreferences("scan_ship_records", Context.MODE_PRIVATE)
+    private fun saveRecordsCache() {
+        try {
+            recordCachePrefs().edit()
+                .putString("today", recordCacheGson.toJson(todayRecords.take(recordCacheLimit)))
+                .putString("yesterday", recordCacheGson.toJson(yesterdayRecords.take(recordCacheLimit)))
+                .apply()
+        } catch (_: Exception) { /* 忽略 */ }
+    }
+    private fun loadRecordsCache() {
+        try {
+            val prefs = recordCachePrefs()
+            val type = object : TypeToken<List<Pkg>>() {}.type
+            val todayJson = prefs.getString("today", null)
+            val yesterdayJson = prefs.getString("yesterday", null)
+            if (!todayJson.isNullOrBlank()) {
+                todayRecords = recordCacheGson.fromJson<List<Pkg>>(todayJson, type) ?: emptyList()
+            }
+            if (!yesterdayJson.isNullOrBlank()) {
+                yesterdayRecords = recordCacheGson.fromJson<List<Pkg>>(yesterdayJson, type) ?: emptyList()
+            }
+            if (todayRecords.isNotEmpty() || yesterdayRecords.isNotEmpty()) {
+                records = if (currentTab == "today") todayRecords else yesterdayRecords
+                countToday = todayRecords.size
+                countYesterday = yesterdayRecords.size
+                refreshList()
+            }
+        } catch (_: Exception) { /* 缓存损坏时静默丢弃 */ }
+    }
 
     private val scanLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -114,7 +151,7 @@ class ScanShipFragment : Fragment() {
         }
     }
 
-    // 拍照发运(2026-11-11):系统相机拍照后压缩上传包装照片
+    // 拍照建包(2026-11-11):系统相机拍照后压缩上传包装照片
     private var pendingPhotoPkg: Pkg? = null
     private var pendingPhotoFile: File? = null
     private val cameraLauncher = registerForActivityResult(
@@ -170,6 +207,7 @@ class ScanShipFragment : Fragment() {
         // 启动时按网络模式应用后端地址（auto 检测 Home-WiFi）
         viewLifecycleOwner.lifecycleScope.launch {
             NetworkDetector.applyNetworkMode(requireContext())
+            loadRecordsCache() // 2026-11-13:先显示本地缓存,再刷新后端
             loadRecords()
             refreshPrinterStatus()
         }
@@ -277,7 +315,11 @@ class ScanShipFragment : Fragment() {
                 )
                 countToday = todayResp.total
                 countYesterday = yesterdayResp.total
-                records = if (currentTab == "today") todayResp.packages else yesterdayResp.packages
+                todayRecords = todayResp.packages
+                yesterdayRecords = yesterdayResp.packages
+                records = if (currentTab == "today") todayRecords else yesterdayRecords
+                // 2026-11-13:打单记录本地缓存最近 100 条,重启可离线查看
+                saveRecordsCache()
                 refreshList()
             } catch (e: Exception) {
                 // 记录加载失败静默，不影响主流程
@@ -546,7 +588,7 @@ class ScanShipFragment : Fragment() {
         }
     }
 
-    // ── 拍照发运(2026-11-11):系统相机拍货件包装 → 压缩 base64 → 上传后台 ──
+    // ── 拍照建包(2026-11-11):系统相机拍货件包装 → 压缩 base64 → 上传后台 ──
     private fun takeShipPhoto(pkg: Pkg) {
         pendingPhotoPkg = pkg
         val dir = File(requireContext().cacheDir, "ship_photos").apply { mkdirs() }

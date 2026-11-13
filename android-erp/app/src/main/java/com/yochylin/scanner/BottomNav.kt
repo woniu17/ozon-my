@@ -18,12 +18,12 @@ interface TabHost {
  * 设置底部导航栏：高亮当前模块，点击其他模块由宿主切换 Fragment（底部栏常驻）
  */
 fun setupBottomNav(activity: Activity, active: String) {
-    // 2026-11-12 顺序:扫描入库 | 扫描打单 | 发运管理 | 拍照发运 | 订单处理 | 财务统计 | 订单统计 | 店铺健康
+    // 2026-11-13 顺序:扫描入库 | 扫描打单 | 拍照建包 | 发运管理 | 订单处理 | 财务统计 | 订单统计 | 店铺健康
     val items = listOf(
         BottomNavItem(R.id.navStock, R.id.navStockIcon, R.id.navStockText, "stock"),
         BottomNavItem(R.id.navHome, R.id.navHomeIcon, R.id.navHomeText, "home"),
-        BottomNavItem(R.id.navContainer, R.id.navContainerIcon, R.id.navContainerText, "container"),
         BottomNavItem(R.id.navShipPhoto, R.id.navShipPhotoIcon, R.id.navShipPhotoText, "shipPhoto"),
+        BottomNavItem(R.id.navContainer, R.id.navContainerIcon, R.id.navContainerText, "container"),
         BottomNavItem(R.id.navOrder, R.id.navOrderIcon, R.id.navOrderText, "order"),
         BottomNavItem(R.id.navFinance, R.id.navFinanceIcon, R.id.navFinanceText, "finance"),
         BottomNavItem(R.id.navStats, R.id.navStatsIcon, R.id.navStatsText, "stats"),

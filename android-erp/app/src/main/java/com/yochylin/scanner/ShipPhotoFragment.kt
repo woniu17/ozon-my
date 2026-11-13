@@ -47,6 +47,8 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import coil.load
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
@@ -68,12 +70,16 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
 
 /**
- * 拍照发运(2026-11-12,底部导航独立页):参考扫描入库的连扫模式。
+ * 拍照建包(2026-11-12,底部导航独立页):参考扫描入库的连扫模式。
  * 上半屏摄像头连扫,扫到货件后自动调起系统相机拍摄包装,拍完自动压缩上传,
  * 上传成功回到扫码界面继续扫下一件——扫码/拍照/上传全程连贯,不打断连扫。
- * 下半屏展示本次拍照发运记录,失败可重试,点击记录可跳订单详情查看照片。
+ * 下半屏展示本次拍照建包记录,失败可重试,点击记录可跳订单详情查看照片。
  */
 class ShipPhotoFragment : Fragment() {
+
+    private companion object {
+        const val MAX_LOCAL_RECORDS = 100 // 本地保存的记录上限(2026-11-13)
+    }
 
     private lateinit var previewView: PreviewView
     private lateinit var startOverlay: TextView
@@ -156,7 +162,7 @@ class ShipPhotoFragment : Fragment() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var hintHideRunnable: Runnable? = null
 
-    // ── 拍照发运:系统相机拍照后压缩上传包装照片 ──
+    // ── 拍照建包:系统相机拍照后压缩上传包装照片 ──
     private var pendingPhotoPkg: Pkg? = null
     private var pendingPhotoFile: File? = null
     private var pendingRecord: RecordEntry? = null
@@ -241,7 +247,11 @@ class ShipPhotoFragment : Fragment() {
         pauseBtn.setTextColor(0xFF165DFF.toInt())
         pauseBtn.setRoundedBg(0xFFE8F3FF.toInt(), 8f)
 
-        addRecord(RecordEntry(RecordStatus.SKIPPED, "", message = "📷 摄像头默认关闭,点击视频区开始扫码拍照"))
+        // 2026-11-13:启动先加载本地历史记录,无历史时才显示初始提示
+        loadLocalRecords()
+        if (records.isEmpty()) {
+            addRecord(RecordEntry(RecordStatus.SKIPPED, "", message = "📷 摄像头默认关闭,点击视频区开始扫码拍照"))
+        }
         updateStats()
     }
 
@@ -622,7 +632,8 @@ class ShipPhotoFragment : Fragment() {
         successCount = 0
         pendingCount = 0
         failCount = 0
-        reportLog("records_clear", "清空本次拍照记录")
+        saveLocalRecords()
+        reportLog("records_clear", "清空本次拍照建包记录")
         updateStats()
     }
 
@@ -679,8 +690,40 @@ class ShipPhotoFragment : Fragment() {
 
     // ── 记录列表 ──
 
+    // ── 本地持久化(2026-11-13):拍照建包记录本地保存最近 100 条,重启不丢失 ──
+    private val gson = Gson()
+    private fun recordsPrefs() = requireContext().getSharedPreferences("ship_photo_records", Context.MODE_PRIVATE)
+    private fun saveLocalRecords() {
+        try {
+            val json = gson.toJson(records.take(MAX_LOCAL_RECORDS))
+            recordsPrefs().edit().putString("records_v1", json).apply()
+        } catch (_: Exception) { /* 忽略:记录保存失败不影响主流程 */ }
+    }
+    private fun loadLocalRecords() {
+        try {
+            val json = recordsPrefs().getString("records_v1", null) ?: return
+            val saved = gson.fromJson<List<RecordEntry>>(json, object : TypeToken<List<RecordEntry>>() {}.type)
+            if (!saved.isNullOrEmpty()) {
+                records.clear()
+                records.addAll(saved.take(MAX_LOCAL_RECORDS))
+                // 统计与本地历史记录对齐(均为最近 100 条)
+                successCount = records.count { it.status == RecordStatus.SUCCESS }
+                pendingCount = records.count { it.status == RecordStatus.PENDING }
+                failCount = records.count { it.status == RecordStatus.FAILED }
+                view?.post { renderAllRecords() }
+            }
+        } catch (_: Exception) { /* 忽略:历史记录格式异常时丢弃 */ }
+    }
+    private fun trimRecords() {
+        if (records.size > MAX_LOCAL_RECORDS) {
+            records.subList(MAX_LOCAL_RECORDS, records.size).clear()
+        }
+    }
+
     private fun addRecord(record: RecordEntry) {
         records.add(0, record)
+        trimRecords()
+        saveLocalRecords()
         view?.post { renderAllRecords() }
     }
 
@@ -689,6 +732,7 @@ class ShipPhotoFragment : Fragment() {
         val idx = records.indexOfFirst { it.packageId == updated.packageId && it.time == updated.time }
         if (idx >= 0) {
             records[idx] = updated
+            saveLocalRecords()
             view?.post { renderAllRecords() }
         }
     }

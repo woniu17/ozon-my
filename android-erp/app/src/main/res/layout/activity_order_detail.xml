@@ -254,7 +254,7 @@
                     android:orientation="vertical" />
             </LinearLayout>
 
-            <!-- 包装照片卡片(2026-11-11,拍照发运):展示已上传的货件包装照片 -->
+            <!-- 包装照片卡片(2026-11-11,拍照建包):展示已上传的货件包装照片 -->
             <LinearLayout
                 android:id="@+id/dPhotoCard"
                 android:layout_width="match_parent"
