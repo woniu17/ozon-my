@@ -56,7 +56,9 @@ import {
 } from '../services/ozon-opi.js';
 import {
   getOrFetchUnfulfilled,
+  getCachedUnfulfilled,
   getOrFetchCarriagePostings,
+  getCachedCarriagePostings,
   invalidateCarriageCandidateCaches,
   warmUnfulfilledCache,
 } from '../services/carriage-candidate-cache.js';
@@ -2297,9 +2299,13 @@ async function getPlaceholderCarriageStats(store, methods) {
   const map = new Map();
   for (const dmId of dmIds) {
     try {
-      const postings = await getOrFetchUnfulfilled(store, dmId, () =>
-        fetchUnfulfilledAwaitingDeliver(store, dmId)
-      );
+      // 2026-11-13 优化:只读缓存,未命中不阻塞发运清单(Ozon 未妥投接口 8~20s)。
+      // 未命中时后台预热,下一次加载(2 分钟 TTL 内)即可展示占位行统计。
+      const postings = getCachedUnfulfilled(store.id, dmId);
+      if (!postings) {
+        warmUnfulfilledCache(store, dmId, () => fetchUnfulfilledAwaitingDeliver(store, dmId));
+        continue;
+      }
       if (!postings.length) {
         map.set(dmId, { total: 0, actual: 0, supplement: 0, reship: 0 });
         continue;
@@ -2394,19 +2400,16 @@ async function attachCarriageDeadlineCounts(store, methods) {
           carriage.deadline_overdue_count = Number(rows[0]?.overdue) || 0;
           return;
         }
-        // 回退:实时拉货件号(本店视角)→ 本地反查 shipment_date
-        const numbers = [];
-        let cursor = '';
-        let guard = 0;
-        do {
-          const page = await carriagePostingList(store, carriage.id, { cursor, limit: 100 });
-          for (const p of page?.postings || []) {
-            if (p?.posting_number) numbers.push(p.posting_number);
-          }
-          cursor = page?.cursor || '';
-          guard += 1;
-        } while (cursor && guard < 50);
-        if (!numbers.length) return;
+        // 2026-11-13 优化:本地无关联时优先读缓存,未命中不阻塞发运清单
+        // (Ozon 货件列表接口慢),后台预热后下次加载即有期限统计。
+        const cachedNumbers = getCachedCarriagePostings(store.id, carriage.id);
+        const numbers = cachedNumbers || [];
+        if (!numbers.length) {
+          void getOrFetchCarriagePostings(store, carriage.id, () =>
+            fetchCarriagePostingNumbers(store, carriage.id)
+          ).catch(() => {});
+          return;
+        }
         const slots = numbers.map(() => '?').join(',');
         const rows = db
           .prepare(

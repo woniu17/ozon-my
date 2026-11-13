@@ -1190,8 +1190,10 @@ async function onConfirmAddCandidates() {
     show('请先勾选要加入的货件', 'warning');
     return;
   }
-  // 已完成发运单:本地补记关联(纯本地写入,不推送 Ozon)
-  if (detail.fromHistory) {
+  // 已完成发运单 / 已形成(formed):本地补记关联(纯本地写入,不推送 Ozon)
+  // 2026-11-13:formed 状态 Ozon set-postings 返回 400 INCORRECT_CARRIAGE_STATUS,
+  // 添加货件只能走本地补记(与历史发运单一致,只写本地关联)。
+  if (detail.fromHistory || detail.carriage.status === 'formed') {
     candidate.saving = true;
     try {
       const items = selected.map((p) => ({ storeId: p.store_id, postingNumber: p.posting_number }));
@@ -1200,7 +1202,11 @@ async function onConfirmAddCandidates() {
       candidate.open = false;
       if (addedCount) show(`已补记 ${addedCount} 个货件`, 'success');
       else show('所选货件均已关联,无需重复添加', 'info');
-      await refreshHistoryDetail();
+      if (detail.fromHistory) {
+        await refreshHistoryDetail();
+      } else {
+        await loadPostings(detail.carriage);
+      }
     } catch (err) {
       show(err.message || String(err), 'error');
     } finally {
