@@ -489,6 +489,11 @@ class PurchaseActivity : ComponentActivity() {
         purchaseContent.removeAllViews()
         val p = pkg ?: return
 
+        // 2026-11-13:先算分摊(含待新增),摘要卡与分摊卡同口径;
+        // 原摘要卡读 pkg.totalPurchaseAmount,待新增采购未保存前该值仍为 0,导致"采购合计始终为 0"。
+        val allocMap = itemAllocForManage()
+        val allocTotal = allocMap.values.sum()
+
         // 包裹摘要卡
         val summary = card()
         val head = LinearLayout(this).apply {
@@ -509,7 +514,7 @@ class PurchaseActivity : ComponentActivity() {
         head.addView(posting)
         summary.addView(head)
         val sub = mutedText(
-            "${items.size} 个商品行 · 采购合计 ${fmtMoney(p.totalPurchaseAmount)}",
+            "${items.size} 个商品行 · 采购合计 ${fmtMoney(if (allocTotal > 0) allocTotal else p.totalPurchaseAmount)}",
             12f
         )
         summary.addView(sub)
@@ -518,7 +523,6 @@ class PurchaseActivity : ComponentActivity() {
         // 商品与分摊卡（有待新增时展示"最终分摊"，即分摊确认区）——置于采购信息上方
         val allocCard = card()
         allocCard.addView(sectionTitle(if (pendingAdd != null) "商品与分摊 · 含待新增" else "商品与分摊"))
-        val allocMap = itemAllocForManage()
         for (it in items) {
             val alloc = allocMap[it.id ?: it.itemId] ?: 0.0
             val qty = it.quantity ?: 0.0
