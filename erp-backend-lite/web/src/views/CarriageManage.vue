@@ -1715,7 +1715,8 @@ defineExpose({ refreshCurrent, listLoading });
               {{ editPostings.saving ? '保存中…' : '保存货件' }}
             </button>
             <button v-if="postingsEditable" class="btn btn-ghost btn-sm" @click="onOpenCandidate">添加货件</button>
-            <button v-if="detail.fromHistory" class="btn btn-ghost btn-sm" @click="onOpenCandidate">添加漏掉的订单</button>
+            <!-- 2026-11-13:已形成(formed)发运单锁定货件,不允许再补记/修改跨店货件 -->
+            <button v-if="detail.fromHistory && detail.carriage.status !== 'formed'" class="btn btn-ghost btn-sm" @click="onOpenCandidate">添加漏掉的订单</button>
             <button
               v-if="!detail.fromHistory"
               class="btn btn-ghost btn-sm"
@@ -1807,7 +1808,8 @@ defineExpose({ refreshCurrent, listLoading });
                 <td v-if="postingsEditable" class="ops">
                   <button class="btn btn-danger btn-sm" @click="onRemovePosting(p)">移除</button>
                 </td>
-                <td v-else-if="detail.fromHistory && p.source === 'manual'" class="ops">
+                <td v-else-if="detail.fromHistory && p.source === 'manual' && detail.carriage.status !== 'formed'" class="ops">
+                  <!-- 2026-11-13:formed 状态锁定,不允许移除跨店补记货件 -->
                   <button class="btn btn-danger btn-sm" @click="onRemoveHistoryPosting(p)">移除补记</button>
                 </td>
               </tr>
