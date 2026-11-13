@@ -56,7 +56,6 @@ import {
 } from '../services/ozon-opi.js';
 import {
   getOrFetchUnfulfilled,
-  getCachedUnfulfilled,
   getOrFetchCarriagePostings,
   getCachedCarriagePostings,
   invalidateCarriageCandidateCaches,
@@ -2299,13 +2298,18 @@ async function getPlaceholderCarriageStats(store, methods) {
   const map = new Map();
   for (const dmId of dmIds) {
     try {
-      // 2026-11-13 优化:只读缓存,未命中不阻塞发运清单(Ozon 未妥投接口 8~20s)。
-      // 未命中时后台预热,下一次加载(2 分钟 TTL 内)即可展示占位行统计。
-      const postings = getCachedUnfulfilled(store.id, dmId);
-      if (!postings) {
-        warmUnfulfilledCache(store, dmId, () => fetchUnfulfilledAwaitingDeliver(store, dmId));
-        continue;
-      }
+      // 2026-11-13:完全本地化计算占位行统计(不依赖 Ozon 未妥投慢接口,口径与期限统计一致):
+      // 候选货件 = 本店该配送方式下 status=awaiting_deliver 的本地订单。
+      const rows = db
+        .prepare(
+          `SELECT o.posting_number
+           FROM op_ozon_order o
+           WHERE o.store_id = ? AND o.status = 'awaiting_deliver'
+             AND o.raw_json IS NOT NULL
+             AND CAST(json_extract(o.raw_json, '$.delivery_method.id') AS TEXT) = ?`
+        )
+        .all(String(store.id), String(dmId));
+      const postings = rows.map((r) => ({ posting_number: r.posting_number }));
       if (!postings.length) {
         map.set(dmId, { total: 0, actual: 0, supplement: 0, reship: 0 });
         continue;
