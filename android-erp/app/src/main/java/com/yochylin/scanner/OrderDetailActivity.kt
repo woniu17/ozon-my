@@ -1799,7 +1799,11 @@ class OrderDetailActivity : ComponentActivity() {
             gravity = Gravity.CENTER
             setRoundedBg(Color.parseColor(bgColor), 10f)
             setPadding(dp(16), dp(13), dp(16), dp(13))
-            val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+            // dActionBar 位于 HorizontalScrollView 内,weight 均分不生效,
+            // 按屏幕宽度显式均分:视口宽 - 操作条 padding(8*2) - 两按钮左右 margin(6*2*2) 后取一半
+            val screenW = resources.displayMetrics.widthPixels
+            val half = (screenW - dp(16) - dp(24)) / 2
+            val lp = LinearLayout.LayoutParams(half, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                 leftMargin = dp(6)
                 rightMargin = dp(6)
             }
