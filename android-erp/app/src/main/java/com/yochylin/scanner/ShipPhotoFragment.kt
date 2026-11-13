@@ -11,6 +11,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.GradientDrawable
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.net.Uri
@@ -423,10 +424,12 @@ class ShipPhotoFragment : Fragment() {
             return
         }
         pendingCount++
+        val totalQty = (pkg.items ?: emptyList()).sumOf { it.quantity ?: 0.0 }.toLong()
         val rec = RecordEntry(
             RecordStatus.PENDING, code, pkg.id, pkg.postingNumber,
             "等待拍照…", pkg.storeName, pkg.storeId,
-            picUrl = pkg.items?.firstOrNull()?.picUrl
+            picUrl = pkg.items?.firstOrNull()?.picUrl,
+            totalQty = totalQty
         )
         addRecord(rec)
         reportLog(
@@ -716,6 +719,7 @@ class ShipPhotoFragment : Fragment() {
         }
 
         val subLine = buildString {
+            if (record.totalQty > 0) append("共 ${record.totalQty} 件 · ")
             append(record.message)
             if (!record.storeName.isNullOrBlank()) append(" · ${record.storeName}")
             append(" · $timeText")
@@ -727,9 +731,10 @@ class ShipPhotoFragment : Fragment() {
             if (mainText != null) {
                 addView(TextView(ctx).apply {
                     text = subLine
-                    textSize = 12f
+                    textSize = 11f
                     setTextColor(record.status.color)
-                    setMaxLines(2)
+                    setMaxLines(1)
+                    ellipsize = android.text.TextUtils.TruncateAt.END
                 }, LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
@@ -737,11 +742,17 @@ class ShipPhotoFragment : Fragment() {
             }
         }
 
-        // 左侧:商品图片(取货件第一个商品图)
+        val hasPackage = record.packageId.isNotBlank()
+
+        // 左侧:商品图片(取货件第一个商品图,参考扫描入库记录的紧凑缩略图样式)
         val productImg = ImageView(ctx).apply {
-            layoutParams = LinearLayout.LayoutParams(dp(48), dp(48))
+            layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
             scaleType = ImageView.ScaleType.CENTER_CROP
-            setBackgroundColor(Color.parseColor("#f2f3f5"))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(6).toFloat()
+                setColor(0xFFF2F3F5.toInt())
+            }
+            clipToOutline = true
         }
         if (!record.picUrl.isNullOrBlank()) {
             productImg.load(record.picUrl) {
@@ -753,9 +764,13 @@ class ShipPhotoFragment : Fragment() {
 
         // 右侧:拍照图片(上传成功后用服务器地址,否则用本地拍照文件)
         val photoImg = ImageView(ctx).apply {
-            layoutParams = LinearLayout.LayoutParams(dp(48), dp(48))
+            layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
             scaleType = ImageView.ScaleType.CENTER_CROP
-            setBackgroundColor(Color.parseColor("#f2f3f5"))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(6).toFloat()
+                setColor(0xFFF2F3F5.toInt())
+            }
+            clipToOutline = true
         }
         val photoSource = photoDisplaySource(record)
         if (photoSource != null) {
@@ -766,11 +781,10 @@ class ShipPhotoFragment : Fragment() {
             photoImg.setOnClickListener { requireContext().showImagePreview(photoSource) }
         }
 
-        val hasPackage = record.packageId.isNotBlank()
         val row = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(8), 0, dp(8))
+            setPadding(0, dp(6), 0, dp(6))
             if (hasPackage) {
                 addView(productImg, LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -779,11 +793,11 @@ class ShipPhotoFragment : Fragment() {
             }
             addView(TextView(ctx).apply {
                 text = record.status.emoji
-                textSize = 16f
+                textSize = 14f
             }, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { rightMargin = dp(4) })
+            ).apply { rightMargin = dp(6) })
             addView(textCol, LinearLayout.LayoutParams(
                 0,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -792,27 +806,25 @@ class ShipPhotoFragment : Fragment() {
             if (record.status == RecordStatus.FAILED && hasPackage) {
                 addView(TextView(ctx).apply {
                     text = "重试"
-                    textSize = 12f
+                    textSize = 11f
                     setTextColor(Color.WHITE)
                     setTypeface(null, Typeface.BOLD)
-                    setPadding(dp(10), dp(5), dp(10), dp(5))
+                    setPadding(dp(8), dp(4), dp(8), dp(4))
                     setRoundedBg(0xFF165DFF.toInt(), 8f)
                     setOnClickListener { retryUpload(record) }
                 }, LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    leftMargin = dp(8)
-                    rightMargin = dp(8)
-                })
+                ).apply { leftMargin = dp(6) })
             }
             if (hasPackage) {
                 addView(photoImg, LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { leftMargin = if (record.status == RecordStatus.FAILED) 0 else dp(8) })
+                ).apply { leftMargin = dp(8) })
             }
-            if (hasPackage && record.status == RecordStatus.SUCCESS) {
+            // 参考扫描入库记录:整行可点击跳订单详情(重试/图片预览按钮各自消费点击)
+            if (hasPackage) {
                 setOnClickListener {
                     startActivity(Intent(requireContext(), OrderDetailActivity::class.java)
                         .putExtra("packageId", record.packageId))
@@ -901,6 +913,7 @@ class ShipPhotoFragment : Fragment() {
         val filePath: String? = null, // 本地拍照文件路径(上传成功后也保留,可作临时预览)
         val picUrl: String? = null,   // 商品图片(Ozon 商品图,记录行左侧展示)
         val photoUrl: String? = null, // 上传后的包装照片相对路径(/uploads/pack-photos/...,记录行右侧展示)
+        val totalQty: Long = 0,       // 货件商品总件数(中间文字展示)
         val time: Long = System.currentTimeMillis()
     )
 }
