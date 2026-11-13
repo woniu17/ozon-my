@@ -2317,18 +2317,6 @@ async function getPlaceholderCarriageStats(store, methods) {
   return map;
 }
 
-// 2026-11-13:已形成(formed)发运单锁定货件组成,禁止修改跨店货件。
-// 状态取自本地发运历史快照(op_carriage_history);无历史记录(如刚创建/占位)视为可编辑。
-function assertCarriageNotFormed(storeId, carriageId) {
-  if (carriageId == null || carriageId === '') return;
-  const row = db
-    .prepare(`SELECT status FROM op_carriage_history WHERE store_id = ? AND carriage_id = ?`)
-    .get(String(storeId), Number(carriageId));
-  if (row?.status === 'formed') {
-    throw new ApiError(ErrorCode.VALIDATION_ERROR, '发运单已形成,货件组成已锁定,不能修改跨店货件');
-  }
-}
-
 // 为发运清单附加"24h内发运期限 / 已超时"货件数(2026-11-02)
 // 数据源:本地 op_ozon_order.shipment_date(Ozon cutoff,与订单列表倒计时同源)。
 //   - 占位行(可创建发运):该配送方式下 status=awaiting_deliver 的货件
@@ -3098,7 +3086,6 @@ router.post('/admin/api/order-process/carriage/posting/reship', async (req, res)
     if (!Number.isInteger(carriageId) || carriageId <= 0 || !postingNumber) {
       return res.status(400).json({ ok: false, message: 'carriageId 与 postingNumber 必填' });
     }
-    assertCarriageNotFormed(store.id, carriageId);
     // 2026-11-10:候选已放宽为全部 awaiting_deliver 货件(available-postings 不再要求历史存在过),
     // 因此补发校验同步去掉"曾在本店其他发运单记录过"的限制(否则 43682572-0077-1 这类
     // 只在本发运单出现过、被 Ozon 释放回池的货件无法补回)。历史仅用于返回标记 fromCarriageId。
@@ -3214,7 +3201,6 @@ router.post('/admin/api/order-process/carriage/approve', async (req, res) => {
 router.post('/admin/api/order-process/carriage/set-postings', async (req, res) => {
   try {
     const store = requireCarriageStore(req);
-    assertCarriageNotFormed(store.id, req.body?.carriageId);
     const r = await carriageSetPostings(store, req.body?.carriageId, req.body?.postingNumbers);
     logger.info(
       { storeId: store.id, carriageId: req.body?.carriageId, count: (req.body?.postingNumbers || []).length },
@@ -3455,7 +3441,6 @@ router.post('/admin/api/order-process/carriage/mixed/add', async (req, res) => {
   try {
     const store = requireCarriageStore(req);
     const carriageId = req.body?.carriageId;
-    assertCarriageNotFormed(store.id, carriageId);
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
     if (!carriageId) throw new ApiError(ErrorCode.VALIDATION_ERROR, 'carriageId 必填');
     if (!items.length) throw new ApiError(ErrorCode.VALIDATION_ERROR, 'items 必填');
@@ -3516,7 +3501,6 @@ router.post('/admin/api/order-process/carriage/mixed/add', async (req, res) => {
 router.post('/admin/api/order-process/carriage/mixed/remove', async (req, res) => {
   try {
     const store = requireCarriageStore(req);
-    assertCarriageNotFormed(store.id, req.body?.carriageId);
     const removed = removeManualCarriagePosting({
       carriageId: req.body?.carriageId,
       postingStoreId: req.body?.postingStoreId,

@@ -208,6 +208,14 @@ const createModalStats = computed(() => {
   return { total: ps.length, actual, supplement, reship };
 });
 
+// 2026-11-13:创建发运弹窗勾选是否发生变化(与初始全选不一致)
+const createPostingsDirty = computed(() => {
+  const all = (createModal.postings || []).map((p) => p.posting_number).filter(Boolean);
+  const selected = [...createModal.selectedPostingNumbers];
+  if (all.length !== selected.length) return true;
+  return all.some((n) => !selected.includes(n));
+});
+
 // 快递员联系方式配置(2026-10-30,支持多条 + 默认项)
 const contactConfigs = reactive({
   loaded: false,
@@ -520,7 +528,7 @@ async function loadCreatePostings() {
   }
 }
 
-async function onCreateFromModal() {
+async function onCreateFromModal(opts = {}) {
   if (!createModal.storeId) {
     show('缺少店铺信息,无法创建发运', 'error');
     return;
@@ -528,6 +536,16 @@ async function onCreateFromModal() {
   if (!createModal.deliveryMethodId) {
     show('缺少配送方式,无法创建发运', 'error');
     return;
+  }
+  // 2026-11-13:勾选有变化时,提示是否保存货件选择
+  if (!opts.skipConfirm && createPostingsDirty.value) {
+    const ok = await confirmStore.ask({
+      title: '保存货件选择？',
+      message: `货件列表已调整(共 ${createModal.postings.length} 件,已选 ${createModal.selectedPostingNumbers.length} 件),是否按当前选择保存并创建发运？`,
+      confirmText: '保存并创建',
+      cancelText: '返回检查',
+    });
+    if (!ok) return;
   }
   createModal.creating = true;
   try {
@@ -587,6 +605,43 @@ async function onCreateFromModal() {
   } finally {
     createModal.creating = false;
   }
+}
+
+// 2026-11-13:关闭创建发运弹窗时,货件勾选有变化则提示是否保存(保存=按当前选择创建发运)
+async function onCreateModalClose(val) {
+  if (val === false && createPostingsDirty.value) {
+    const ok = await confirmStore.ask({
+      title: '货件选择已更改',
+      message: '是否按当前选择保存货件？保存将创建发运并应用勾选;不保存则直接关闭。',
+      confirmText: '保存',
+      cancelText: '不保存',
+    });
+    if (ok) {
+      await onCreateFromModal({ skipConfirm: true });
+      return; // 创建成功时弹窗已关闭;失败则保持打开
+    }
+  }
+  createModal.open = !!val;
+}
+
+// 2026-11-13:关闭详情弹窗时,货件列表有编辑则提示是否保存
+async function onDetailModalClose(val) {
+  if (val === false && editPostings.dirty) {
+    const ok = await confirmStore.ask({
+      title: '保存货件？',
+      message: '货件列表已更改,是否保存？',
+      confirmText: '保存',
+      cancelText: '不保存',
+    });
+    if (ok) {
+      await onSavePostings();
+      if (!editPostings.dirty) {
+        detail.open = false;
+      }
+      return;
+    }
+  }
+  detail.open = !!val;
 }
 
 // 创建弹窗:配置管理(2026-11-05)
@@ -1548,7 +1603,7 @@ defineExpose({ refreshCurrent, listLoading });
     </div>
 
     <!-- 详情弹窗 -->
-    <AppModal :open="detail.open" title="发运详情" size="xl" @update:open="detail.open = $event">
+    <AppModal :open="detail.open" title="发运详情" size="xl" @update:open="onDetailModalClose">
       <template v-if="detail.carriage">
         <div class="detail-grid">
           <div class="detail-item">
@@ -1715,8 +1770,7 @@ defineExpose({ refreshCurrent, listLoading });
               {{ editPostings.saving ? '保存中…' : '保存货件' }}
             </button>
             <button v-if="postingsEditable" class="btn btn-ghost btn-sm" @click="onOpenCandidate">添加货件</button>
-            <!-- 2026-11-13:已形成(formed)发运单锁定货件,不允许再补记/修改跨店货件 -->
-            <button v-if="detail.fromHistory && detail.carriage.status !== 'formed'" class="btn btn-ghost btn-sm" @click="onOpenCandidate">添加漏掉的订单</button>
+            <button v-if="detail.fromHistory" class="btn btn-ghost btn-sm" @click="onOpenCandidate">添加漏掉的订单</button>
             <button
               v-if="!detail.fromHistory"
               class="btn btn-ghost btn-sm"
@@ -1808,8 +1862,7 @@ defineExpose({ refreshCurrent, listLoading });
                 <td v-if="postingsEditable" class="ops">
                   <button class="btn btn-danger btn-sm" @click="onRemovePosting(p)">移除</button>
                 </td>
-                <td v-else-if="detail.fromHistory && p.source === 'manual' && detail.carriage.status !== 'formed'" class="ops">
-                  <!-- 2026-11-13:formed 状态锁定,不允许移除跨店补记货件 -->
+                <td v-else-if="detail.fromHistory && p.source === 'manual'" class="ops">
                   <button class="btn btn-danger btn-sm" @click="onRemoveHistoryPosting(p)">移除补记</button>
                 </td>
               </tr>
@@ -1915,7 +1968,7 @@ defineExpose({ refreshCurrent, listLoading });
     </AppModal>
 
     <!-- 创建发运弹窗(2026-11-01:占位行触发;2026-11-02:参考详情弹窗布局,展示将自动进入发运的货件列表+状态) -->
-    <AppModal :open="createModal.open" title="创建发运" size="xl" @update:open="createModal.open = $event">
+    <AppModal :open="createModal.open" title="创建发运" size="xl" @update:open="onCreateModalClose">
       <div class="create-modal">
         <div class="detail-grid">
           <div class="detail-item">
