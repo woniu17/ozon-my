@@ -1450,6 +1450,11 @@ defineExpose({ refreshCurrent, listLoading });
                 {{ row.postings_count }}
                 <div v-if="row.deadline_24h_count" class="dl-badge">24h内 {{ row.deadline_24h_count }}</div>
                 <div v-if="row.deadline_overdue_count" class="dl-badge overdue">超时 {{ row.deadline_overdue_count }}</div>
+                <!-- 2026-11-13:占位行同样展示实际/补登记/可能需要补发 -->
+                <div v-if="row.supplement_count != null" class="row-sub supplement-stats">
+                  实际 {{ row.actual_count }} · 补登记 {{ row.supplement_count }}
+                  <span v-if="row.reship_count != null"> · 可能补发 {{ row.reship_count }}</span>
+                </div>
               </td>
               <td class="ops">
                 <button class="btn btn-primary btn-sm" @click="onGoCreate(row)">创建发运</button>
@@ -1481,9 +1486,10 @@ defineExpose({ refreshCurrent, listLoading });
                 {{ row.postings_count }}
                 <div v-if="row.deadline_24h_count" class="dl-badge">24h内 {{ row.deadline_24h_count }}</div>
                 <div v-if="row.deadline_overdue_count" class="dl-badge overdue">超时 {{ row.deadline_overdue_count }}</div>
-                <!-- 2026-11-08:本大包实际货件 / 补登记货件统计 -->
+                <!-- 2026-11-08:本大包实际货件 / 补登记货件统计;2026-11-13:增加可能需要补发 -->
                 <div v-if="row.supplement_count != null" class="row-sub supplement-stats">
                   实际 {{ row.actual_count }} · 补登记 {{ row.supplement_count }}
+                  <span v-if="row.reship_count != null"> · 可能补发 {{ row.reship_count }}</span>
                 </div>
               </td>
               <td class="ops">
