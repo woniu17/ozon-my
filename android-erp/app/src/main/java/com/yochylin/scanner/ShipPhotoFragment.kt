@@ -786,9 +786,10 @@ class ShipPhotoFragment : Fragment() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, dp(6), 0, dp(6))
             if (hasPackage) {
+                // 注意:必须显式传 dp 尺寸,不能传 WRAP_CONTENT,否则图片按原图撑开成超大缩略图
                 addView(productImg, LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
+                    dp(40),
+                    dp(40)
                 ).apply { rightMargin = dp(8) })
             }
             addView(TextView(ctx).apply {
@@ -818,9 +819,10 @@ class ShipPhotoFragment : Fragment() {
                 ).apply { leftMargin = dp(6) })
             }
             if (hasPackage) {
+                // 同样固定 dp 尺寸,避免 WRAP_CONTENT 把拍照图撑大
                 addView(photoImg, LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
+                    dp(40),
+                    dp(40)
                 ).apply { leftMargin = dp(8) })
             }
             // 参考扫描入库记录:整行可点击跳订单详情(重试/图片预览按钮各自消费点击)

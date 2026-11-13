@@ -452,7 +452,8 @@ class StockScanFragment : Fragment() {
         pendingCount++
         dialogShowing = true
         updateStats()
-        addRecord(RecordEntry(RecordStatus.PENDING, code, pkg.id, pkg.postingNumber, "共 $totalQty 件,待确认", imageUrl))
+        val rec = RecordEntry(RecordStatus.PENDING, code, pkg.id, pkg.postingNumber, "共 $totalQty 件,待确认", imageUrl)
+        addRecord(rec)
         reportLog(
             "multi_confirm_show", "多件商品弹窗二次确认",
             code = code, packageId = pkg.id, postingNumber = pkg.postingNumber, storeId = pkg.storeId,
@@ -465,7 +466,8 @@ class StockScanFragment : Fragment() {
             confirmText = "确认入库",
             onConfirm = {
                 confirmed = true
-                doShip(pkg.id, pkg.postingNumber, code, imageUrl, pkg.storeId)
+                // 复用弹窗的"待确认"记录:原地更新为"入库中"→结果
+                doShip(pkg.id, pkg.postingNumber, code, imageUrl, pkg.storeId, rec)
             }
         )
         dialog.setOnDismissListener {
@@ -535,8 +537,8 @@ class StockScanFragment : Fragment() {
         dialog.show()
     }
 
-    /** 调用入库接口并记录结果 */
-    private fun doShip(packageId: String, postingNumber: String?, code: String, imageUrl: String? = null, storeId: String? = null) {
+    /** 调用入库接口并记录结果;2026-11-13(用户反馈):提交后先增加"入库中"记录,结果返回原地更新,不重复刷记录 */
+    private fun doShip(packageId: String, postingNumber: String?, code: String, imageUrl: String? = null, storeId: String? = null, pendingRec: RecordEntry? = null) {
         // 防重(2026-11):同一货件入库请求未返回时,忽略重复扫码/重复点击,避免叠加触发两次入库
         if (!submittingPackageIds.add(packageId)) {
             showScanHint("⏳ 该订单正在入库处理中:$postingNumber", error = false)
@@ -550,19 +552,30 @@ class StockScanFragment : Fragment() {
             return
         }
         reportLog("ship_submit", "提交入库", code = code, packageId = packageId, postingNumber = postingNumber, storeId = storeId, result = "pending")
+        // 有 pendingRec(多件确认/重试)时原地更新为"入库中",否则新增一条"入库中"记录
+        val rec = pendingRec ?: RecordEntry(
+            RecordStatus.PENDING, code, packageId, postingNumber,
+            "入库中…", imageUrl
+        )
+        if (pendingRec != null) {
+            replaceRecord(pendingRec.copy(status = RecordStatus.PENDING, message = "入库中…"))
+        } else {
+            addRecord(rec)
+        }
         viewLifecycleOwner.lifecycleScope.launch {
             try {
                 val r = Api.post("/admin/api/order-process/ship", mapOf("packageId" to packageId)).asJsonObject
                 if (r.optBoolean("alreadyShipped")) {
                     // 2026-11-08(用户反馈):已入库订单只在视频区提示"已入库过",不增加记录/计数,
-                    // 避免重复扫描刷记录列表。
+                    // 避免重复扫描刷记录列表;移除刚加的"入库中"占位。
+                    removeRecord(rec)
                     showScanHint("✅ 已入库过:$postingNumber", error = false)
                     playFeedback(true)
                     reportLog("ship_already", "该订单已入库过", code = code, packageId = packageId, postingNumber = postingNumber, storeId = storeId, result = "warning")
                 } else {
                     val title = if (r.optBoolean("pending")) "入库指令已提交" else "入库成功"
                     successCount++
-                    addRecord(RecordEntry(RecordStatus.SUCCESS, code, packageId, postingNumber, title, imageUrl))
+                    replaceRecord(rec.copy(status = RecordStatus.SUCCESS, message = title))
                     playFeedback(true)
                     reportLog(
                         if (r.optBoolean("pending")) "ship_pending" else "ship_success",
@@ -572,10 +585,9 @@ class StockScanFragment : Fragment() {
                 }
             } catch (e: Exception) {
                 failCount++
-                addRecord(RecordEntry(
-                    RecordStatus.FAILED, code, packageId, postingNumber,
-                    "入库失败:${e.message ?: e.javaClass.simpleName}",
-                    imageUrl
+                replaceRecord(rec.copy(
+                    status = RecordStatus.FAILED,
+                    message = "入库失败:${e.message ?: e.javaClass.simpleName}"
                 ))
                 playFeedback(false)
                 reportLog("ship_failed", "入库失败:${e.message ?: e.javaClass.simpleName}", code = code, packageId = packageId, postingNumber = postingNumber, storeId = storeId, result = "failed")
@@ -727,7 +739,31 @@ class StockScanFragment : Fragment() {
 
     private fun addRecord(record: RecordEntry) {
         records.add(0, record)
-        view?.post { renderRecord(record) }
+        view?.post { renderAllRecords() }
+    }
+
+    /** 更新已存在记录(入库中→结果)后整体重绘 */
+    private fun replaceRecord(updated: RecordEntry) {
+        val idx = records.indexOfFirst { it.packageId == updated.packageId && it.time == updated.time }
+        if (idx >= 0) {
+            records[idx] = updated
+            view?.post { renderAllRecords() }
+        }
+    }
+
+    /** 移除记录(已入库过时移除"入库中"占位,保持不刷记录) */
+    private fun removeRecord(record: RecordEntry) {
+        val idx = records.indexOfFirst { it.packageId == record.packageId && it.time == record.time }
+        if (idx >= 0) {
+            records.removeAt(idx)
+            view?.post { renderAllRecords() }
+        }
+    }
+
+    private fun renderAllRecords() {
+        if (view == null) return
+        recordList.removeAllViews()
+        for (record in records) renderRecord(record)
     }
 
     private fun renderRecord(record: RecordEntry) {
@@ -805,7 +841,7 @@ class StockScanFragment : Fragment() {
                     setPadding(dp(12), dp(5), dp(12), dp(5))
                     setRoundedBg(0xFF165DFF.toInt(), 8f)
                     setOnClickListener {
-                        doShip(record.packageId, record.postingNumber, record.code, record.imageUrl)
+                        doShip(record.packageId, record.postingNumber, record.code, record.imageUrl, pendingRec = record)
                     }
                 }, LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -824,8 +860,8 @@ class StockScanFragment : Fragment() {
             setBackgroundColor(0xFFF2F3F5.toInt())
         }
 
-        recordList.addView(row, 0)
-        recordList.addView(divider, 1, LinearLayout.LayoutParams(
+        recordList.addView(row)
+        recordList.addView(divider, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             dp(1)
         ))
