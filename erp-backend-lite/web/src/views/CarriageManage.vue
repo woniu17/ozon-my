@@ -196,6 +196,18 @@ const detailStats = computed(() => {
   return { total: ps.length, actual: ps.length - supplement, supplement };
 });
 
+// 2026-11-13:创建发运弹窗货件统计
+// 实际本包货件 = 候选货件中既非 Ozon 补登记(cross_store_shipped)、也非已在其他发运单(inOtherCarriage)的货件;
+// 补登记货件 = 已随跨店大包发出,加入本单仅为 Ozon 补登记;
+// 可能需要补发货件 = 已在其他发运单发出(已发货),若勾选加入本单即为补发。
+const createModalStats = computed(() => {
+  const ps = createModal.postings || [];
+  const supplement = ps.filter((p) => p.cross_store_shipped).length;
+  const reship = ps.filter((p) => p.inOtherCarriage).length;
+  const actual = ps.filter((p) => !p.cross_store_shipped && !p.inOtherCarriage).length;
+  return { total: ps.length, actual, supplement, reship };
+});
+
 // 快递员联系方式配置(2026-10-30,支持多条 + 默认项)
 const contactConfigs = reactive({
   loaded: false,
@@ -2003,6 +2015,12 @@ defineExpose({ refreshCurrent, listLoading });
             <em v-if="createModal.loading" class="field-hint">加载中…</em>
             <em v-else class="field-hint">共 {{ createModal.postings.length }} 件(该配送方式下所有「已准备发运」货件自动进入)</em>
           </div>
+          <!-- 2026-11-13:创建发运统计:实际本包 / Ozon 补登记 / 可能需要补发 -->
+          <div v-if="!createModal.loading && createModalStats.total" class="create-stats-bar">
+            <span class="create-stat create-stat-actual">实际本包 <b>{{ createModalStats.actual }}</b></span>
+            <span class="create-stat create-stat-supplement">补登记 <b>{{ createModalStats.supplement }}</b></span>
+            <span class="create-stat create-stat-reship">可能需要补发 <b>{{ createModalStats.reship }}</b></span>
+          </div>
           <div v-if="createModal.loading" class="list-empty">加载中…</div>
           <div v-else-if="!createModal.postings.length" class="list-empty">该配送方式下暂无待发运货件</div>
           <table v-else class="posting-table create-postings-table">
@@ -2312,6 +2330,32 @@ defineExpose({ refreshCurrent, listLoading });
 }
 .create-postings-table {
   min-width: 640px;
+}
+/* 2026-11-13:创建发运统计条(实际本包 / 补登记 / 可能需要补发) */
+.create-stats-bar {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin: 10px 0 12px;
+  padding: 8px 14px;
+  background: #f7f8fa;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #4e5969;
+}
+.create-stat b {
+  font-size: 15px;
+  margin-left: 4px;
+}
+.create-stat-actual b {
+  color: #165dff;
+}
+.create-stat-supplement b {
+  color: #d97706;
+}
+.create-stat-reship b {
+  color: #d93026;
 }
 .sel-col {
   width: 28px;
