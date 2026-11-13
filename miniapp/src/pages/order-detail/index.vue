@@ -211,6 +211,50 @@
       </view>
     </view>
 
+    <!-- 最近采购参考(2026-11-13,对齐安卓端):仅未录入采购时展示同商品历史采购 -->
+    <view v-if="purchaseHistory.length && !links.length" class="card history-card">
+      <view class="section-title">最近采购参考 · 同商品历史采购(最多 {{ purchaseHistory.length }} 条)</view>
+      <view v-for="h in purchaseHistory" :key="h.id" class="po">
+        <view class="po-head">
+          <text class="po-platform">{{ platformLabel(h.platform) }}</text>
+          <view class="po-sn-wrap">
+            <text
+              v-if="orderDetailUrl(h.platform, h.purchaseSn)"
+              class="po-sn link"
+              @click="openOrderPage(h.platform, h.purchaseSn)"
+            >{{ h.purchaseSn || '#' + h.id }}</text>
+            <text v-else class="po-sn">{{ h.purchaseSn || '#' + h.id }}</text>
+            <text v-if="h.purchaseSn" class="copy-tag" @click.stop="copyText(h.purchaseSn, '采购单号')">复制</text>
+          </view>
+          <text class="po-status">{{ poStatusLabel(h.poStatus) }}</text>
+        </view>
+        <view class="po-meta">
+          <text class="po-amt">金额 {{ fmtMoney(h.paymentAmount) }}</text>
+          <text v-if="h.sellerName" class="po-meta-item">{{ h.sellerName }}</text>
+          <text v-if="h.buyerAccount" class="po-meta-item">买:{{ h.buyerAccount }}</text>
+        </view>
+        <view class="po-meta muted">
+          <text>采购时间:{{ fmtTime(h.payAt || h.gmtCreate) }}</text>
+          <text v-if="historyCount(h) > 0"> · 数量 ×{{ historyCount(h) }}</text>
+        </view>
+        <view v-for="(pi, j) in h.items || []" :key="j" class="po-goods">
+          <image
+            v-if="pi.thumbUrl || pi.picUrl"
+            class="po-img"
+            :src="pi.thumbUrl || pi.picUrl"
+            mode="aspectFill"
+            lazy-load
+            @click="previewImg(pi.thumbUrl || pi.picUrl)"
+          />
+          <view v-else class="po-img"></view>
+          <view class="po-goods-main">
+            <view class="po-goods-title">{{ pi.goodsName || pi.title || '采购商品' }}</view>
+            <view class="po-goods-sub">{{ pi.spec ? pi.spec + ' · ' : '' }}¥{{ pi.price ?? '—' }} × {{ pi.number || pi.num || 1 }}</view>
+          </view>
+        </view>
+      </view>
+    </view>
+
     <!-- 国内物流轨迹(上家→我,最新在前) -->
     <view class="card" v-if="traces.length">
       <view class="section-title">国内物流轨迹({{ traces.length }})</view>
@@ -262,7 +306,7 @@
 <script setup>
 import { ref, reactive, computed, onUnmounted } from 'vue';
 import { onLoad, onShow, onHide, onUnload } from '@dcloudio/uni-app';
-import { getOrderDetail, getPriceWatchSnapshots, syncPackage, shipPackage, syncPackagePurchaseLogistics, setOrderSkuWeight } from '../../api/order.js';
+import { getOrderDetail, getPurchaseHistory, getPriceWatchSnapshots, syncPackage, shipPackage, syncPackagePurchaseLogistics, setOrderSkuWeight } from '../../api/order.js';
 import { fmtMoney, fmtTime, fmtRate, weekdayCN } from '../../utils/fmt.js';
 
 const packageId = ref('');
@@ -270,6 +314,7 @@ const pkg = ref(null);
 const items = ref([]);
 const links = ref([]);
 const traces = ref([]);
+const purchaseHistory = ref([]); // 最近采购参考(2026-11-13,对齐安卓端)
 const traceOpen = ref(false);
 const infoOpen = ref(false);
 const loadError = ref('');
@@ -591,7 +636,23 @@ async function loadDetail() {
   } catch (e) {
     loadError.value = e.message || '加载失败';
   }
+  loadPurchaseHistory(); // 最近采购参考(2026-11-13,对齐安卓端;异步不阻塞详情)
   loadPriceWatchSnapshots(); // 跟卖快照异步加载,不阻塞详情
+}
+
+// 加载同商品历史采购(仅未录入采购时展示,最多 5 条)
+async function loadPurchaseHistory() {
+  try {
+    const r = await getPurchaseHistory(packageId.value);
+    purchaseHistory.value = r || [];
+  } catch (e) {
+    purchaseHistory.value = [];
+  }
+}
+
+// 历史采购商品总数量
+function historyCount(h) {
+  return (h.items || []).reduce((s, it) => s + (Number(it.number || it.num || 1) || 0), 0);
 }
 
 // ── 订单商品跟卖快照(2026-11,与安卓 2026-10-30 三行展示对齐)────────
@@ -798,6 +859,11 @@ onShow(() => {
   border-radius: 18rpx;
   padding: 24rpx;
   margin-bottom: 20rpx;
+}
+/* 最近采购参考(2026-11-13,对齐安卓端黄色参考卡) */
+.history-card {
+  background: #fffbe6;
+  border: 1rpx solid #ffe58f;
 }
 
 .head-line {
@@ -1363,6 +1429,9 @@ onShow(() => {
   margin-top: 10rpx;
   font-size: 22rpx;
   color: #86909c;
+}
+.po-meta.muted {
+  color: #a6abb3;
 }
 
 .po-amt {
