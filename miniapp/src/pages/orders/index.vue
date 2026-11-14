@@ -391,15 +391,23 @@ function profitClass(pkg) {
 }
 
 // ── OGL 运费/拆包提示(2026-11):所有 OGL 订单展示整件运费,可拆订单对比拆包省/贵 ──
+// 2026-11-13:整件与拆包后各包裹同属一个等级(如都"超轻小件")时,拆包无运费差异,提示简洁"不拆单"
+function splitSameGroup(sa) {
+  if (!sa || !sa.splitEligible || !sa.whole?.groupName) return false;
+  const pkgs = sa.best?.packages || [];
+  if (!pkgs.length) return false;
+  return pkgs.every((p) => p.groupName === sa.whole.groupName);
+}
 function splitCls(pkg) {
   const sa = pkg.splitAnalysis;
-  if (!sa || !sa.splitEligible) return 'info';
+  if (!sa || !sa.splitEligible || splitSameGroup(sa)) return 'info';
   return isSplitSaving(sa) ? 'save' : 'worse';
 }
 function splitText(pkg) {
   const sa = pkg.splitAnalysis;
   if (!sa) return '';
   if (!sa.splitEligible) return `整件运费 ${fmtMoney(sa.whole?.deliveryCny)}`;
+  if (splitSameGroup(sa)) return '不拆单,整件与拆单同属一等级';
   if (isSplitSaving(sa)) return `拆${sa.packagesCount}包省 ${fmtMoney(sa.saveCny)}`;
   return `整件更省 · 拆${sa.packagesCount}包贵 ${fmtMoney(Math.abs(sa.saveCny || 0))}`;
 }
@@ -413,6 +421,7 @@ function splitNote(pkg) {
   if (!sa.splitEligible) {
     return sa.reason === 'single_unit' ? '单件' : sa.reason === 'multi_sku' ? '多SKU' : sa.reason === 'too_many_units' ? '件数过多' : '不可拆';
   }
+  if (splitSameGroup(sa)) return '同等级';
   return sa.operable ? '可拆包' : '已发货';
 }
 function splitNoteActive(pkg) {

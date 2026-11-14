@@ -2985,16 +2985,24 @@ function othersTitle(pkg) {
 function isSplitSaving(sa) {
   return !!sa && sa.saving === true && (sa.saveCny || 0) > 0;
 }
+// 2026-11-13:整件与拆包后各包裹同属一个等级(如都"超轻小件")时,拆包无运费差异,提示简洁"不拆单"
+function splitSameGroup(sa) {
+  if (!sa || !sa.splitEligible || !sa.whole?.groupName) return false;
+  const pkgs = sa.best?.packages || [];
+  if (!pkgs.length) return false;
+  return pkgs.every((p) => p.groupName === sa.whole.groupName);
+}
 function splitAnalysisCls(pkg) {
   const sa = pkg.splitAnalysis;
   if (!sa) return '';
-  if (!sa.splitEligible) return 'split-save-info';
+  if (!sa.splitEligible || splitSameGroup(sa)) return 'split-save-info';
   return isSplitSaving(sa) ? 'split-save-save' : 'split-save-worse';
 }
 function splitAnalysisLabel(pkg) {
   const sa = pkg.splitAnalysis;
   if (!sa) return '';
   if (!sa.splitEligible) return '整件运费';
+  if (splitSameGroup(sa)) return '不拆单';
   if (isSplitSaving(sa)) return sa.operable ? '💡拆包省钱' : '拆包省钱';
   return '整件更省';
 }
@@ -3002,6 +3010,7 @@ function splitAnalysisText(pkg) {
   const sa = pkg.splitAnalysis;
   if (!sa) return '';
   if (!sa.splitEligible) return fmtMoney(sa.whole?.deliveryCny);
+  if (splitSameGroup(sa)) return '整件与拆单同属一等级';
   if (isSplitSaving(sa)) return `拆${sa.packagesCount}包省 ${fmtMoney(sa.saveCny)}`;
   return `拆${sa.packagesCount}包贵 ${fmtMoney(Math.abs(sa.saveCny || 0))}`;
 }
@@ -3009,6 +3018,10 @@ function splitAnalysisText(pkg) {
 function splitAnalysisTitle(pkg) {
   const sa = pkg.splitAnalysis;
   if (!sa?.applicable) return '';
+  // 2026-11-13:同等级时简洁提示
+  if (splitSameGroup(sa)) {
+    return `整件与拆单同属「${sa.whole.groupName}」等级,运费无差异,建议不拆单。`;
+  }
   const lines = [];
   lines.push(`不拆(整件 ${sa.whole.groupName}): ${sa.whole.formula}`);
   if (sa.splitEligible) {

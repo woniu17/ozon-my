@@ -671,6 +671,22 @@ class OrderDetailActivity : ComponentActivity() {
         dSplitAnalysisCard.visibility = View.VISIBLE
         dSplitAnalysisCard.setBackgroundColor(Color.parseColor(if (sa.operable) "#e8ffea" else "#f4faf5"))
 
+        // 2026-11-13:整件与拆包后各包裹同属一个等级(如都"超轻小件")时,拆包无运费差异,提示简洁"不拆单"
+        val sameGroup = sa.splitEligible == true &&
+            sa.whole?.groupName != null &&
+            sa.best?.packages?.isNotEmpty() == true &&
+            sa.best.packages.all { it.groupName == sa.whole.groupName }
+        if (sameGroup) {
+            dSplitAnalysisCard.addView(TextView(this).apply {
+                text = "不拆单,整件与拆单同属一等级(${sa.whole?.groupName ?: ""})"
+                setTextColor(Color.parseColor("#0b7a2d"))
+                textSize = 13f
+                setTypeface(null, android.graphics.Typeface.BOLD)
+                setPadding(dp(2), dp(4), dp(2), dp(4))
+            })
+            return
+        }
+
         // 2026-11-03:标题去掉字面 ¥(fmtMoney 已带 ¥);saving 且 saveCny>0 才显示「可省」,否则「贵 X,不拆比较好」
         val saving = sa.saving == true && (sa.saveCny ?: 0.0) > 0
         val head = LinearLayout(this).apply {
