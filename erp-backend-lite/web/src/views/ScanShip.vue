@@ -242,6 +242,50 @@ function profitCalc(pkg) {
     rates: `${saleRate} · ${costRate}`,
   };
 }
+// ── OGL 运费/拆包分析展示(2026-11,对齐订单处理页):三种结论——拆包省钱 / 整件更省 / 不可拆只展示整件 ──
+// 拆包是否省钱:后端 saving 与 saveCny 同源,这里再防御一次(saveCny<=0 视为不省)
+function isSplitSaving(sa) {
+  return !!sa && sa.saving === true && (sa.saveCny || 0) > 0;
+}
+function splitAnalysisCls(pkg) {
+  const sa = pkg.splitAnalysis;
+  if (!sa) return '';
+  if (!sa.splitEligible) return 'split-save-info';
+  return isSplitSaving(sa) ? 'split-save-save' : 'split-save-worse';
+}
+function splitAnalysisLabel(pkg) {
+  const sa = pkg.splitAnalysis;
+  if (!sa) return '';
+  if (!sa.splitEligible) return '整件运费';
+  if (isSplitSaving(sa)) return sa.operable ? '💡拆包省钱' : '拆包省钱';
+  return '整件更省';
+}
+function splitAnalysisText(pkg) {
+  const sa = pkg.splitAnalysis;
+  if (!sa) return '';
+  if (!sa.splitEligible) return fmtMoney(sa.whole?.deliveryCny);
+  if (isSplitSaving(sa)) return `拆${sa.packagesCount}包省 ${fmtMoney(sa.saveCny)}`;
+  return `拆${sa.packagesCount}包贵 ${fmtMoney(Math.abs(sa.saveCny || 0))}`;
+}
+// OGL 运费悬浮:整件/拆包完整公式 + 结论 + 是否仍可操作
+function splitAnalysisTitle(pkg) {
+  const sa = pkg.splitAnalysis;
+  if (!sa?.applicable) return '';
+  const lines = [];
+  lines.push(`不拆(整件 ${sa.whole.groupName}): ${sa.whole.formula}`);
+  if (sa.splitEligible) {
+    lines.push(`拆 ${sa.packagesCount} 包: ${sa.formula}`);
+    lines.push(isSplitSaving(sa)
+      ? `可省 ${fmtMoney(sa.saveCny)},建议拆包`
+      : `拆包反而贵 ${fmtMoney(Math.abs(sa.saveCny || 0))},建议整件发出`);
+    lines.push(sa.operable ? '当前状态仍可拆包(发货前)' : '已发货/交运,无法再拆(仅参考)');
+  } else {
+    lines.push(sa.reason === 'single_unit' ? '单件订单,无拆包空间'
+      : sa.reason === 'multi_sku' ? '多 SKU 订单,暂不分析拆包'
+      : sa.reason === 'too_many_units' ? '件数过多,暂不分析拆包' : '');
+  }
+  return lines.filter(Boolean).join('\n');
+}
 function fmtTime(t) {
   if (!t) return '—';
   const d = new Date(t);
@@ -1208,6 +1252,16 @@ function onPrinterChange() {
             </div>
             <div class="profit-row mono formula">{{ profitCalc(pkg).main }}</div>
             <div v-if="profitCalc(pkg).rates" class="profit-row mono formula sub">{{ profitCalc(pkg).rates }}</div>
+            <!-- OGL 运费/拆包提示(2026-11-13,对齐订单处理页):拆包省/贵/不可拆 -->
+            <div
+              v-if="pkg.splitAnalysis?.applicable"
+              class="profit-row split-save-row"
+              :class="splitAnalysisCls(pkg)"
+              :title="splitAnalysisTitle(pkg)"
+            >
+              <span class="split-save-name">{{ splitAnalysisLabel(pkg) }}</span>
+              <span class="split-save-val">{{ splitAnalysisText(pkg) }}</span>
+            </div>
           </div>
 
           <!-- 操作条 -->
@@ -1695,6 +1749,35 @@ function onPrinterChange() {
 }
 .profit-row {
   min-width: 0;
+}
+/* OGL 运费/拆包提示行(2026-11,对齐订单处理页):绿=拆包省,橙=拆包贵,灰=不可拆只展示整件 */
+.split-save-row {
+  align-items: center;
+  margin-top: 2px;
+}
+.split-save-name {
+  font-weight: 600;
+}
+.split-save-val {
+  font-weight: 700;
+}
+.split-save-save .split-save-name,
+.split-save-save .split-save-val {
+  color: #16a34a;
+}
+.split-save-worse .split-save-name,
+.split-save-worse .split-save-val {
+  color: #d97706;
+}
+.split-save-worse .split-save-val {
+  font-weight: 600;
+}
+.split-save-info .split-save-name,
+.split-save-info .split-save-val {
+  color: #6b7280;
+}
+.split-save-info .split-save-val {
+  font-weight: 600;
 }
 .profit-head {
   display: flex;
