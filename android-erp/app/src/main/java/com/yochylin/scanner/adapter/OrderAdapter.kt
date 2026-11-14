@@ -216,20 +216,26 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
 
             // OGL 拆包省钱提示(2026-11):applicable 时显示,点击进详情看公式
             // 2026-11-03:去掉字面 ¥(fmtMoney 已带 ¥);saving 且 saveCny>0 才显示「省」,否则「整件更省·拆包贵」
+            // 2026-11-13:整件与拆包后各包裹同属一个等级时,与详情页一致提示简洁"不拆单"
             val sa = pkg.splitAnalysis
             if (sa?.applicable == true) {
                 val saving = sa.saving == true && (sa.saveCny ?: 0.0) > 0
+                val sameGroup = sa.splitEligible == true &&
+                    sa.whole?.groupName != null &&
+                    sa.best?.packages?.isNotEmpty() == true &&
+                    sa.best.packages.all { it.groupName == sa.whole.groupName }
                 oSplitSave.visibility = View.VISIBLE
                 oSplitSave.text = buildString {
                     when {
                         !sa.splitEligible -> append("整件运费 ").append(fmtMoney(sa.whole?.deliveryCny))
+                        sameGroup -> append("不拆单,整件与拆单同属一等级")
                         saving -> append("拆").append(sa.packagesCount ?: 0).append("包省 ").append(fmtMoney(sa.saveCny))
                         else -> append("整件更省 · 拆").append(sa.packagesCount ?: 0).append("包贵 ")
                             .append(fmtMoney(Math.abs(sa.saveCny ?: 0.0)))
                     }
-                    if (sa.splitEligible) append(if (sa.operable) " · 可拆包" else " · 已发货")
+                    if (sa.splitEligible && !sameGroup) append(if (sa.operable) " · 可拆包" else " · 已发货")
                 }
-                if (sa.operable && sa.splitEligible) {
+                if (sa.operable && sa.splitEligible && !sameGroup) {
                     oSplitSave.setTextColor(Color.parseColor("#16a34a"))
                     oSplitSave.setRoundedBg(Color.parseColor("#e8ffea"))
                 } else {

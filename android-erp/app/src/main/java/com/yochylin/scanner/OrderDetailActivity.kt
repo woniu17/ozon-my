@@ -678,7 +678,7 @@ class OrderDetailActivity : ComponentActivity() {
             sa.best.packages.all { it.groupName == sa.whole.groupName }
         if (sameGroup) {
             dSplitAnalysisCard.addView(TextView(this).apply {
-                text = "不拆单,整件与拆单同属一等级(${sa.whole?.groupName ?: ""})"
+                text = "不拆单,整件与拆单同属一等级"
                 setTextColor(Color.parseColor("#0b7a2d"))
                 textSize = 13f
                 setTypeface(null, android.graphics.Typeface.BOLD)
