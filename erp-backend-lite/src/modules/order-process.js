@@ -3394,7 +3394,10 @@ router.post('/admin/api/order-process/carriage/mixed-candidates', async (req, re
          FROM op_package p
          JOIN op_ozon_order o ON o.id = p.ozon_order_id
          WHERE p.store_id IN (${storePlaceholders})
-           AND p.operate_status = 'wait_dispatch'
+           -- 2026-11-13:跨店候选放宽为 待发运(wait_dispatch) 或 Ozon 仍在待发运池(awaiting_deliver)
+           -- 解决:货件曾在本店发运单记录导致本地状态推进为 dispatching,但 Ozon 发运单完结后未上网被释放回池,
+           -- 此时应能在其他发运单中再次作为跨店货件补记/补发。
+           AND (p.operate_status = 'wait_dispatch' OR o.status = 'awaiting_deliver')
            AND (? IS NULL OR COALESCE(p.waybill_printed_at, p.dispatched_at) >= ?)
            AND (? IS NULL OR COALESCE(p.waybill_printed_at, p.dispatched_at) <= ?)
            AND (? IS NULL OR o.posting_number LIKE ?)
