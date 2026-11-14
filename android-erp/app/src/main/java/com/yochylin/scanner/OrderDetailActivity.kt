@@ -356,7 +356,7 @@ class OrderDetailActivity : ComponentActivity() {
             }
         }
 
-        // 头部:平台标签 + 单号(可复制,占剩余宽度) + 打开APP(右侧,与采购信息卡同构)
+        // 头部:平台标签 + 单号(可复制) + 复制小图标 + 弹性占位 + 打开APP(右侧,与采购信息卡同构)
         val head = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -375,11 +375,22 @@ class OrderDetailActivity : ComponentActivity() {
             typeface = Typeface.MONOSPACE
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { leftMargin = dp(8) }
+            maxWidth = dp(180)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { leftMargin = dp(8) }
             setOnClickListener {
                 if (!h.purchaseSn.isNullOrBlank()) copyText(h.purchaseSn!!, "采购单号")
             }
         })
+        // 2026-11-13:历史采购订单号后加复制小图标
+        if (!h.purchaseSn.isNullOrBlank()) {
+            head.addView(ImageView(this).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(14), dp(14)).apply { leftMargin = dp(4) }
+                setImageResource(R.drawable.ic_copy)
+                setOnClickListener { copyText(h.purchaseSn!!, "采购单号") }
+            })
+        }
+        // 弹性占位:把"打开APP"推到右侧
+        head.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
         head.addView(TextView(this).apply {
             text = "打开APP"
             setTextColor(Color.parseColor("#7d4dd3"))
