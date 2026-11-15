@@ -77,7 +77,7 @@ import {
   removeManualCarriagePosting,
 } from '../db/dao/sqlite/carriage-posting-dao.js';
 import { getAccrualsByPackageIds, getAccrualTypeSumsByPackageIds, getRubCnyRate, setRubCnyRate, getBydayStats, getSettledEligiblePackageIds } from '../db/dao/sqlite/accrual-dao.js';
-import { stripImageSizeSuffix, imageCacheUrlFor } from '../services/order-image-cache.js';
+import { stripImageSizeSuffix, imageCacheUrlFor, ensureImageCached } from '../services/order-image-cache.js';
 import { attachPostingProductImages } from '../services/posting-image.js';
 import { runAccrualByDaySync } from '../services/accrual-byday-sync.js';
 import { getPendingExportState } from '../db/dao/sqlite/purchase-sync-dao.js';
@@ -773,6 +773,22 @@ router.get('/admin/api/order-process/purchase-history/:packageId', (req, res, ne
     if (!detail) return res.status(404).json({ ok: false, message: '包裹不存在' });
     const skus = (detail.items || []).map((it) => it.sku);
     const history = orderPackageDao.getRecentPurchasesBySkus(skus, 5);
+    // 2026-11-15:后台预热历史采购商品图到本地图床(1688 等 CDN 图片懒下载可能滞后,
+    // 返回时即触发 ensureImageCached,保证前端展示时文件已就绪)
+    for (const h of history || []) {
+      for (const it of h.items || []) {
+        const u = it?.thumbUrl;
+        if (typeof u === 'string' && u.trim()) {
+          let src = u.trim();
+          try {
+            const parsed = new URL(src);
+            const s = parsed.searchParams.get('src');
+            if (s) src = s;
+          } catch { /* 原 URL 直接使用 */ }
+          void ensureImageCached(src).catch(() => {});
+        }
+      }
+    }
     res.json(ok(history));
   } catch (e) {
     next(e);
