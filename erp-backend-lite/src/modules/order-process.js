@@ -1687,7 +1687,10 @@ router.post('/admin/api/order-process/logs', (req, res, next) => {
 // 因此需延迟重试:15s × 最多 10 次(约 2.5 分钟覆盖);全局并发 3,超出排队。
 const BARCODE_PREFETCH_RETRY_INTERVAL_MS = 15 * 1000;
 const BARCODE_PREFETCH_MAX_RETRIES = 10;
-const BARCODE_PREFETCH_MAX_CONCURRENCY = 3;
+// 2026-11-16:并发从 3 降到 1,且任务间隔 1s——Ozon package-label/create 限速按秒,
+// 原 3 并发连续入库时同一秒发起多个 create 触发 429(面单预取失败)。
+const BARCODE_PREFETCH_MAX_CONCURRENCY = 1;
+const BARCODE_PREFETCH_INTERVAL_MS = 1000;
 
 // key: `${storeId}|${postingNumber}` → { retries, timer? }(存在=预取中/已调度重试,用于去重)
 const barcodePrefetchState = new Map();
@@ -1714,7 +1717,8 @@ function pumpBarcodePrefetch() {
     barcodePrefetchActive += 1;
     runBarcodePrefetch(job).finally(() => {
       barcodePrefetchActive -= 1;
-      pumpBarcodePrefetch();
+      // 2026-11-16:任务间隔 1s 再启动下一个,避免触发 Ozon 每秒限速(429)
+      setTimeout(pumpBarcodePrefetch, BARCODE_PREFETCH_INTERVAL_MS);
     });
   }
 }
