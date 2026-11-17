@@ -745,12 +745,12 @@ class NewOrderNotifyService : Service() {
     }
 
     /**
-     * 通知第二行统一格式："xN ￥金额"（2026-10-18 用户要求，如 x1 ￥19.0）。
-     * N>0 时显示数量前缀；金额保留一位小数（全角人民币符号）。
+     * 通知第二行统一格式："xN ￥金额"（2026-10-18 用户要求；2026-11-16 金额改为保留两位小数，如 x1 ￥19.00）。
+     * N>0 时显示数量前缀；金额保留两位小数（全角人民币符号）。
      */
     private fun formatItemAmountLine(itemCount: Int, amount: Double): String {
         val countText = if (itemCount > 0) "x$itemCount " else ""
-        return "$countText￥${String.format(Locale.US, "%.1f", amount)}"
+        return "$countText￥${String.format(Locale.US, "%.2f", amount)}"
     }
 
     /** 北京时间（Asia/Shanghai）相对今天的偏移日期，格式 YYYY-MM-DD（与 H5 统计口径一致） */
