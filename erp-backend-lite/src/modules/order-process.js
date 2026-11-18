@@ -714,6 +714,8 @@ router.get('/admin/api/order-process/detail/:id', (req, res, next) => {
       detail.package.weightSource = weightMap.get(id).source;
     }
     detail.rubRate = rateInfo;
+    // 2026-11-16:详情接口同样返回取消原因中文(与列表一致),安卓/H5/Web 统一展示中文
+    detail.package.cancelReasonCn = translateCancelReason(detail.package.cancelReason);
     detail.package.profit = computeProfit(detail.package, detail.package.operateStatus === 'cancelled', rate);
     // OGL 拆包分析(与列表同口径,详情页展示完整公式)
     const dItems = detail.items || [];

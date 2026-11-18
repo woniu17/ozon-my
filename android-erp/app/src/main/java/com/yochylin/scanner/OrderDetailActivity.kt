@@ -2187,7 +2187,10 @@ class OrderDetailActivity : ComponentActivity() {
     }
 
     private fun cancelReasonText(p: Pkg): String {
-        return CANCEL_REASON_LABELS[p.cancelReasonId] ?: p.cancelReason ?: ""
+        // 2026-11-16:优先用后端翻译的中文(覆盖全部俄文原因,与 web 一致),回退本地 ID 映射,最后回退原文
+        return p.cancelReasonCn?.takeIf { it.isNotBlank() }
+            ?: CANCEL_REASON_LABELS[p.cancelReasonId]
+            ?: p.cancelReason ?: ""
     }
 
     private fun poStatusLabel(s: String?): String = when (s) {
@@ -2290,6 +2293,7 @@ class OrderDetailActivity : ComponentActivity() {
             678 to "不符合承运商要求",
             940 to "货件未通过海关清关",
             684 to "买家未提供护照数据",
+            359 to "您未按时发货", // 2026-11-16 补充(此前缺失,导致 42123311-0141-1 显示俄文)
         )
     }
 }
