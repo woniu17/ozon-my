@@ -166,10 +166,16 @@ export function imageCacheUrlFor(url) {
   const cacheIdx = s.indexOf('/images/cache/');
   if (cacheIdx >= 0) {
     if (cacheIdx === 0) return base + s; // 相对路径 → 补全当前 base
+    const prefix = s.slice(0, cacheIdx);
     try {
-      const u = new URL(s.slice(0, cacheIdx));
+      const u = new URL(prefix);
       const h = u.hostname.toLowerCase();
-      if (h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]' || isPrivateIp(h)) {
+      // 2026-11-16:本机图床前缀(公网配置 base / 回环 / 内网私有地址)统一重写为当前请求 base。
+      // 修复:H5/安卓内网访问时,数据库缓存的公网图床 URL(如历史采购 items_json)若不重写,
+      // 会指向公网域名导致内网设备加载失败(表现为部分图片看不到)。
+      const isLocalImageHost = h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]'
+        || isPrivateIp(h) || prefix === config.imageHostBaseUrl;
+      if (isLocalImageHost) {
         return base + s.slice(cacheIdx);
       }
     } catch { /* 前缀非标准 URL,透传 */ }
