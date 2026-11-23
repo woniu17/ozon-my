@@ -86,6 +86,7 @@ import {
   DELIVERY_PER_G_CNY,
   estimateDeliveryCny,
   estimateProfit,
+  estimateOglElectronicFeeCny,
   isOglDelivery,
 } from '../services/profit-estimator.js';
 import { deriveOglWeight, getOglGroup, analyzeOglSplit } from '../services/ogl-freight.js';
@@ -396,6 +397,10 @@ function computeProfit(pkg, cancelled = false, rate = null) {
     const deliveryGroup = w != null && isOglDelivery(pkg.deliveryMethod, pkg.tplIntegrationType)
       ? getOglGroup(orderAmount, w)?.name || null
       : null;
+    // 2026-11-16:真实应计口径下,电子服务费已含在 Ozon payout 中(不参与利润计算),仅按公式估算展示
+    const serviceFeeEst = isOglDelivery(pkg.deliveryMethod, pkg.tplIntegrationType)
+      ? estimateOglElectronicFeeCny({ valueCny: orderAmount, rubCnyRate: a.rate })
+      : null;
     return {
       estimated: false,
       // 佣金兼容字段:非配送类扣款合计(销售佣金+代理佣金+其它;others 已含 66,勿再加 agentFee)
@@ -404,6 +409,7 @@ function computeProfit(pkg, cancelled = false, rate = null) {
       profit,
       // 公式估算的配送费(基于实际重量,仅展示用,不参与利润计算)
       delivery: deliveryEst,
+      serviceFee: serviceFeeEst,
       deliveryGroup,
       weightG: w,
       weightSource: pkg.weightSource || null,
@@ -450,6 +456,7 @@ function computeProfit(pkg, cancelled = false, rate = null) {
     weightG: pkg.weightG != null ? Number(pkg.weightG) : null,
     deliveryMethodName: pkg.deliveryMethod,
     tplIntegrationType: pkg.tplIntegrationType,
+    rubCnyRate: rate, // 2026-11-16:OGL 电子服务费按汇率换算(2%,15~200 RUB)
   });
   return { ...est, weightSource: pkg.weightSource || null };
 }

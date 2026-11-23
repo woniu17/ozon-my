@@ -15,7 +15,29 @@ export const DEFAULT_COMMISSION_RATE = 0.16;
 export const DELIVERY_BASE_CNY = 3.37;
 export const DELIVERY_PER_G_CNY = 0.0281;
 
+// OGL 电子服务费(2026-11-16):每件货件价值 2%,每件封底 15 卢布、封顶 200 卢布。
+// 订单金额为 CNY,按 rubCnyRate(1 RUB = rate CNY) 换算成卢布计费后再换回 CNY。
+export const OGL_ELECTRONIC_FEE_RATE = 0.02;
+export const OGL_ELECTRONIC_FEE_MIN_RUB = 15;
+export const OGL_ELECTRONIC_FEE_MAX_RUB = 200;
+
 const round2 = (n) => Math.round(n * 100) / 100;
+
+/**
+ * OGL 电子服务费估算(CNY):max(15, min(200, 货件价值RUB × 2%)) × 汇率。
+ * 货件价值由 CNY 换算成 RUB(÷ rubCnyRate);汇率缺失/非法返回 null。
+ */
+export function estimateOglElectronicFeeCny({ valueCny, rubCnyRate }) {
+  const v = Number(valueCny);
+  const rate = Number(rubCnyRate);
+  if (!Number.isFinite(v) || v <= 0 || !Number.isFinite(rate) || rate <= 0) return null;
+  const valueRub = v / rate;
+  const feeRub = Math.max(
+    OGL_ELECTRONIC_FEE_MIN_RUB,
+    Math.min(OGL_ELECTRONIC_FEE_MAX_RUB, valueRub * OGL_ELECTRONIC_FEE_RATE)
+  );
+  return round2(feeRub * rate);
+}
 
 /** 是否 OGL 配送(Доставка Ozon курьеру / ozon_outsourced) */
 export function isOglDelivery(deliveryMethodName, tplIntegrationType) {
@@ -52,21 +74,24 @@ export function estimateDeliveryCny({ weightG, valueCny = null, deliveryMethodNa
  * @param {string} [p.tplIntegrationType] tpl 集成类型(ozon_outsourced=OGL)
  * @returns {{commission,delivery?,deliveryGroup?,escrow,profit,profitRateCost,profitRateSale,estimated,weightG?,weightMissing?}}
  */
-export function estimateProfit({ amountCny, purchaseCny, weightG, deliveryMethodName, tplIntegrationType }) {
+export function estimateProfit({ amountCny, purchaseCny, weightG, deliveryMethodName, tplIntegrationType, rubCnyRate = null }) {
   const amount = Number(amountCny) || 0;
   const purchase = Number(purchaseCny) || 0;
   const commission = round2(amount * DEFAULT_COMMISSION_RATE);
   const w = weightG != null ? Number(weightG) : null;
   const ogl = isOglDelivery(deliveryMethodName, tplIntegrationType);
+  // 2026-11-16:OGL 电子服务费(2%,15~200 RUB);非 OGL 或汇率缺失为 null
+  const serviceFee = ogl ? estimateOglElectronicFeeCny({ valueCny: amount, rubCnyRate }) : null;
 
   if (w != null && Number.isFinite(w)) {
     const delivery = estimateDeliveryCny({ weightG: w, valueCny: amount, deliveryMethodName, tplIntegrationType });
     const group = ogl ? getOglGroup(amount, w) : null;
-    const escrow = round2(amount - commission - delivery);
+    const escrow = round2(amount - commission - delivery - (serviceFee || 0));
     const profit = round2(escrow - purchase);
     return {
       commission,
       delivery,
+      serviceFee,
       deliveryGroup: group?.name || null,
       escrow,
       profit,
@@ -77,11 +102,12 @@ export function estimateProfit({ amountCny, purchaseCny, weightG, deliveryMethod
     };
   }
 
-  // 兜底:无重量,配送隐含在佣金内(原 16% 打包口径)
-  const escrow = round2(amount - commission);
+  // 兜底:无重量,配送隐含在佣金内(原 16% 打包口径);电子服务费与重量无关,OGL 仍扣减
+  const escrow = round2(amount - commission - (serviceFee || 0));
   const profit = round2(escrow - purchase);
   return {
     commission,
+    serviceFee,
     escrow,
     profit,
     profitRateCost: purchase > 0 ? Math.round((profit / purchase) * 10000) / 100 : null,

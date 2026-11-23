@@ -4079,6 +4079,8 @@ onUnmounted(() => {
               <div class="amt-row sub" :title="deliveryTitle(pkg)"><span class="amt-name">国际配送</span><span class="amt-val" :class="{ muted: pkg.accrual?.delivery == null }">{{ pkg.accrual?.delivery != null ? fmtMoney(pkg.accrual.delivery) : '—' }}</span></div>
               <!-- 国际配送(估):公式 3.37 + 0.0281 × weight_g 估算 -->
               <div class="amt-row sub muted" :title="deliveryTitle(pkg)"><span class="amt-name">国际配送(估)</span><span class="amt-val" :class="{ muted: pkg.profit?.delivery == null }">{{ pkg.profit?.delivery != null ? fmtMoney(pkg.profit.delivery) : '—' }}</span></div>
+              <!-- 电子服务费(估,2026-11-16):OGL 电子服务费,货件价值 2%,每件 15~200 卢布 -->
+              <div v-if="pkg.profit?.serviceFee != null" class="amt-row sub muted" title="OGL 电子服务费(估):每件货件价值 2%,最低 15 卢布、最高 200 卢布"><span class="amt-name">电子服务费(估)</span><span class="amt-val">{{ fmtMoney(pkg.profit.serviceFee) }}</span></div>
               <!-- 重量(实际):来源=订单称重 或 Ozon后台同步SKU加权(整数 g) -->
               <div class="amt-row sub" :title="weightTitle(pkg)"><span class="amt-name">{{ weightLabel(pkg) }}</span><span class="amt-val" :class="{ muted: pkg.weightG == null }">{{ pkg.weightG != null ? Math.floor(pkg.weightG) + 'g' : '—' }}</span></div>
               <!-- 重量(估):由实际配送费反推(整数 g) -->

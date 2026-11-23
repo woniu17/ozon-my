@@ -59,6 +59,7 @@
         <view class="info-row"><text class="k">重量</text><text class="v">{{ pkg.weightG != null ? Math.floor(pkg.weightG) + 'g' : '—' }}</text></view>
         <view class="info-row"><text class="k">销售佣金</text><text class="v">{{ pkg.accrual?.saleFee != null ? fmtMoney(pkg.accrual.saleFee) : '—' }}</text></view>
         <view class="info-row"><text class="k">国际配送(估)</text><text class="v">{{ pkg.profit?.delivery != null ? fmtMoney(pkg.profit.delivery) : '—' }}</text></view>
+        <view v-if="pkg.profit?.serviceFee != null" class="info-row"><text class="k">电子服务费(估)</text><text class="v">{{ fmtMoney(pkg.profit.serviceFee) }}</text></view>
       </view>
 
       <!-- 其它信息:折叠 -->

@@ -658,6 +658,10 @@ class OrderDetailActivity : ComponentActivity() {
             append(p.profit?.delivery?.let { fmtMoney(it) } ?: "—")
             p.profit?.deliveryGroup?.takeIf { it.isNotBlank() }?.let { append(" · ").append(it) }
         })
+        // OGL 电子服务费(估,2026-11-16):货件价值 2%,每件 15~200 卢布
+        if (p.profit?.serviceFee != null) {
+            addInfoRow(dInfoList, "电子服务费(估)", fmtMoney(p.profit.serviceFee))
+        }
     }
 
     // OGL 拆包省钱分析(2026-11):applicable 时展示整件/拆包公式对比,点击卡片进列表不适用场景不显示

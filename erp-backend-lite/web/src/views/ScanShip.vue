@@ -229,16 +229,18 @@ function profitCalc(pkg) {
   if (p.returned) {
     return { estimated: true, main: `利润 = −采购 ${n2(purchase)} = ${fmtMoney(p.profit)}(已退货,货款被全额扣回)`, rates: null };
   }
+  // 2026-11-16:OGL 电子服务费(2%,15~200 卢布)
+  const feeText = p.serviceFee != null && p.serviceFee > 0 ? ` − 电子服务费 ${n2(p.serviceFee)}(2%,15~200₽)` : '';
   if (p.delivery != null) {
     return {
       estimated: true,
-      main: `利润(估) = 订单 ${n2(orderAmount)} − 佣金 ${n2(p.commission)}(订单×16%) − 国际配送 ${n2(p.delivery)}(3.37+0.0281×${Math.floor(p.weightG ?? 0)}g) − 采购 ${n2(purchase)} = ${fmtMoney(p.profit)}`,
+      main: `利润(估) = 订单 ${n2(orderAmount)} − 佣金 ${n2(p.commission)}(订单×16%) − 国际配送 ${n2(p.delivery)}(3.37+0.0281×${Math.floor(p.weightG ?? 0)}g)${feeText} − 采购 ${n2(purchase)} = ${fmtMoney(p.profit)}`,
       rates: `${saleRate} · ${costRate}`,
     };
   }
   return {
     estimated: true,
-    main: `利润(估) = 订单 ${n2(orderAmount)} − 佣金 ${n2(p.commission)}(订单×16%,配送隐含) − 采购 ${n2(purchase)} = ${fmtMoney(p.profit)}(无重量,配送未单独估算)`,
+    main: `利润(估) = 订单 ${n2(orderAmount)} − 佣金 ${n2(p.commission)}(订单×16%,配送隐含)${feeText} − 采购 ${n2(purchase)} = ${fmtMoney(p.profit)}(无重量,配送未单独估算)`,
     rates: `${saleRate} · ${costRate}`,
   };
 }
