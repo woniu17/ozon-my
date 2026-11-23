@@ -331,6 +331,13 @@ function fmtRemain(pkg) {
   const body = d > 0 ? `${d}天${h}小时` : h > 0 ? `${h}小时${m}分` : `${m}分`;
   return neg ? `已超时${body}` : `剩${body}`;
 }
+// 2026-11-16:已进入集运中及之后状态(集运中/已签收/已成功),不再受最迟交运期限约束,
+// 改为展示集运时间,避免已集运订单仍显示"已超时"红色倒计时造成误导。
+const SHIPPED_STAGES = ['delivering', 'signed', 'settled'];
+function isShippedStage(pkg) {
+  if (!pkg) return false;
+  return SHIPPED_STAGES.includes(pkg.operateStatus) || ['delivering', 'delivered'].includes(pkg.ozonStatus);
+}
 // 采购商品数量合计(items_json 各商品 number 求和;无明细返回 0)
 function poGoodsCount(l) {
   return (l.items || []).reduce((s, i) => s + Number(i.number || i.num || 1), 0);
@@ -1052,7 +1059,11 @@ function onPrinterChange() {
                 <div v-if="pkg.note" class="order-note" :title="pkg.note">备注:{{ pkg.note }}</div>
                 <div class="order-line">
                   下单 {{ fmtTime(pkg.inProcessAt) }}
-                  <template v-if="pkg.lastDeliveryAt">
+                  <!-- 2026-11-16:已进入集运中及之后状态,改展示集运时间,不再显示最迟交运倒计时 -->
+                  <template v-if="isShippedStage(pkg)">
+                    <span v-if="pkg.deliveringDate"> · 集运时间 {{ fmtTime(pkg.deliveringDate) }}</span>
+                  </template>
+                  <template v-else-if="pkg.lastDeliveryAt">
                     · 最迟交运 {{ fmtTime(pkg.lastDeliveryAt) }}
                     <span class="ship-remain" :class="shipRemainCls(pkg)" :title="'Ozon 最迟交运时间(shipment_date)'">{{ fmtRemain(pkg) }}</span>
                   </template>
