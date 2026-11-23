@@ -512,6 +512,21 @@ function reconcileMother(storeId, mother) {
     const motherItemByKey = new Map(items.map((it) => [`${it.sku}\u0000${it.offer_id}`, it]));
     let touched = false;
 
+    // 2026-11-16 修复:多子件时母件被过度迁移(如 1 母件+2 子件各 1 件,逐个子件按 M:C 迁移导致母件剩 0)。
+    // ① 母件关联行 quantity 用"迁移前快照"(不随迭代递减),② 比例分母用"母件+所有子件"总量。
+    const originalQtyByLinkId = new Map();
+    for (const ls of linksByItem.values()) for (const l of ls) originalQtyByLinkId.set(l.id, l.quantity);
+    const childQtyByItem = new Map(); // 母件 item id → 所有子件该 SKU 数量总和
+    for (const ch of children) {
+      const chPkg = db.prepare(`SELECT id, is_ignored FROM op_package WHERE ozon_order_id = ?`).get(ch.id);
+      if (!chPkg || chPkg.is_ignored) continue;
+      const chItems = db.prepare(`SELECT sku, offer_id, quantity FROM op_ozon_order_item WHERE ozon_order_id = ?`).all(ch.id);
+      for (const ci of chItems) {
+        const mi = motherItemByKey.get(`${ci.sku}\u0000${ci.offer_id}`);
+        if (mi) childQtyByItem.set(mi.id, (childQtyByItem.get(mi.id) || 0) + (Number(ci.quantity) || 0));
+      }
+    }
+
     for (const child of children) {
       const childPkg = db.prepare(`SELECT id, is_ignored FROM op_package WHERE ozon_order_id = ?`).get(child.id);
       if (!childPkg || childPkg.is_ignored) continue;
@@ -548,12 +563,18 @@ function reconcileMother(storeId, mother) {
 
         // 按母件:子件数量比例(M:C)分配:汇总母件+子件在每个采购单的合计数量,
         // 用最大余数法算出子件在每个采购单的目标数量,再迁移差值(幂等)。
+        // 2026-11-16:母件行数量用迁移前快照,比例分母=母件+所有子件总量,保证多子件时母件保留份额。
         const rows = mLinks.map((ml) => ({
-          totalQty: ml.quantity + (childQtyByPo.get(ml.purchase_order_id) || 0),
+          totalQty: (originalQtyByLinkId.get(ml.id) ?? ml.quantity) + (childQtyByPo.get(ml.purchase_order_id) || 0),
           childQty: childQtyByPo.get(ml.purchase_order_id) || 0,
           ml,
         }));
-        const targets = proportionalChildTargets(mItem.quantity, cit.quantity, rows);
+        const allChildQty = childQtyByItem.get(mItem.id) || cit.quantity;
+        const targets = proportionalChildTargets(
+          mItem.quantity + Math.max(0, allChildQty - cit.quantity),
+          cit.quantity,
+          rows,
+        );
 
         for (let li = 0; li < rows.length; li++) {
           const ml = rows[li].ml;
