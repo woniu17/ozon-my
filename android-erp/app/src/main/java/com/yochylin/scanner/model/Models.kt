@@ -166,6 +166,8 @@ data class PkgItem(
     val quantity: Double? = null,
     // 本系统维护重量/Ozon后台重量(2026-11):订单详情页直接设置本系统重量
     var customWeightG: Double? = null,
+    // 本系统商品别名(2026-11-16):订单详情设置,通知/展示用
+    var customAlias: String? = null,
     val ozonWeightG: Double? = null,
 )
 

@@ -198,6 +198,11 @@ async function ensureMigrations() {
     db.exec(`ALTER TABLE product_data_cache ADD COLUMN custom_weight_g REAL`);
     console.log('[db] migration: added column product_data_cache.custom_weight_g');
   }
+  // product_data_cache.custom_alias:本系统商品别名(本地维护),订单详情设置,通知/列表展示用(2026-11-16)
+  if (!cols.some((c) => c.name === 'custom_alias')) {
+    db.exec(`ALTER TABLE product_data_cache ADD COLUMN custom_alias TEXT`);
+    console.log('[db] migration: added column product_data_cache.custom_alias');
+  }
   // product_data_cache.custom_purchase_price:本系统采购价(CNY),价格管理页维护
   // 与订单实际采购金额相互独立,作为商品维度定价基准(2026-09-18,docs/价格管理-概要设计.md)
   if (!cols.some((c) => c.name === 'custom_purchase_price')) {

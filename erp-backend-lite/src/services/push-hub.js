@@ -77,6 +77,30 @@ function resolveItemCount(postingNumber, payload) {
  * 通知图片却走公网域名导致加载失败）。改为相对路径后安卓端用自身 Api.BASE_URL 拼接，
  * 内网/公网自动适配，根治"通知无图"。
  */
+/**
+ * 查货件商品的本系统别名(product_data_cache.custom_alias,2026-11-16)。
+ * 取第一个已设置别名的商品;无别名返回 null(安卓通知第一行显示商品名兜底)。
+ */
+function resolveProductAlias(postingNumber) {
+  try {
+    const row = getDb()
+      .prepare(
+        `SELECT p.custom_alias AS alias
+         FROM op_ozon_order_item oi
+         JOIN op_ozon_order o ON o.id = oi.ozon_order_id
+         JOIN product_data_cache p ON p.sku = CAST(oi.sku AS TEXT)
+         WHERE o.posting_number = ? AND p.custom_alias IS NOT NULL AND p.custom_alias != ''
+         ORDER BY oi.id
+         LIMIT 1`
+      )
+      .get(String(postingNumber));
+    return row?.alias || null;
+  } catch (err) {
+    logger.warn({ err: err.message, postingNumber }, 'push-hub: 查询商品别名失败');
+    return null;
+  }
+}
+
 function resolveProductImageUrl(postingNumber) {
   try {
     const row = getDb()
@@ -302,6 +326,8 @@ export function publishPostingEvent(messageType, payload) {
     productImageUrl: resolveProductImageUrl(postingNumber),
     // 商品总数量(2026-10-18 通知第二行 xN 用,0 表示未知,安卓端隐藏数量)
     itemCount: resolveItemCount(postingNumber, payload),
+    // 商品别名(2026-11-16 通知第一行展示,无别名时安卓端显示商品名)
+    productAlias: resolveProductAlias(postingNumber),
     // 包裹 id(2026-10-17 通知点击跳转订单详情用,空则安卓端退化为打开订单列表)
     packageId: resolvePackageId(postingNumber),
     occurredAt: new Date().toISOString(),

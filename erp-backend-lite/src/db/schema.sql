@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS product_data_cache (
   store_id            TEXT,
   description_quality INTEGER DEFAULT 0,  -- 描述质量:0=空 1=占位 2=按钮污染 3=正常(同步时由 classifyDescriptionQuality 计算)
   custom_weight_g     REAL,               -- 自定义重量(克,本地覆盖采集值)
+  custom_alias        TEXT,               -- 本系统商品别名(本地维护,通知/展示用,2026-11-16)
   custom_purchase_price REAL,             -- 自定义采购价(本地覆盖采集值)
   custom_purchase_price_at TEXT,           -- 自定义采购价更新时间
   fetched_at          TEXT DEFAULT (datetime('now'))

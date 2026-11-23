@@ -771,6 +771,26 @@ router.put('/admin/api/order-process/sku-weight/:sku', (req, res, next) => {
   }
 });
 
+// PUT /admin/api/order-process/sku-alias/:sku —— 设置/清除本系统商品别名(2026-11-16)
+// 与 sku-weight 同构:本地维护 product_data_cache.custom_alias,订单详情设置,通知/列表展示用。
+// body: { alias: string|null }  空/null = 清除别名
+router.put('/admin/api/order-process/sku-alias/:sku', (req, res, next) => {
+  try {
+    const sku = String(req.params.sku || '').trim();
+    if (!sku) return res.status(400).json({ ok: false, message: '需要 sku 参数' });
+    const raw = req.body?.alias;
+    const alias = raw == null ? null : String(raw).trim() || null;
+    db.prepare(
+      `INSERT INTO product_data_cache (sku, data, store_id, fetched_at) VALUES (?, '{}', NULL, datetime('now'))
+       ON CONFLICT(sku) DO NOTHING`
+    ).run(sku);
+    db.prepare(`UPDATE product_data_cache SET custom_alias = ? WHERE sku = ?`).run(alias, sku);
+    res.json(ok({ sku, customAlias: alias }));
+  } catch (e) {
+    next(e);
+  }
+});
+
 // GET /admin/api/order-process/purchase-history/:packageId —— 未采购订单"最近采购参考"(2026-10-28)
 // 按包裹商品 SKU 精确匹配历史采购单(最多5条),供未采购订单录入采购时参考最近价格/供应商/买家账号
 // 2026-10-29:由 offer_id 改为 SKU(同 SKU 可能因改款/变体有多个 offer_id,仅按 offer_id 会漏同款历史单)

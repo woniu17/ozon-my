@@ -82,6 +82,7 @@ class NewOrderNotifyService : Service() {
         val machineName: String = "",
         val productImageUrl: String = "",
         val packageId: String = "", // 2026-10-17:通知点击跳转订单详情用
+        val productAlias: String = "", // 2026-11-16:商品别名(通知第一行展示)
     )
 
     companion object {
@@ -310,7 +311,7 @@ class NewOrderNotifyService : Service() {
                 "NEW_ORDER" -> {
                     if (!tryMarkNotified("NEW_ORDER:$postingNumber")) continue
                     val imageUrl = ev.optString("productImageUrl")
-                    val info = NewOrderInfo(store, postingNumber, amount, ev.optInt("itemCount"), machine, imageUrl, ev.optString("packageId"))
+                    val info = NewOrderInfo(store, postingNumber, amount, ev.optInt("itemCount"), machine, imageUrl, ev.optString("packageId"), ev.optString("productAlias"))
                     val total = ev.optInt("waitProcessCount", 0).toLong()
                     sendNewOrderNotification(total, 1, listOf(info))
                     orderAdded = true
@@ -602,8 +603,10 @@ class NewOrderNotifyService : Service() {
         for (i in 0 until arr.size()) {
             val p = arr.get(i).asJsonObject
             // 商品首图 + 商品数量(2026-10-16/18 通知大图/第二行 xN):遍历 items 累计 quantity,取第一张非空图
+            // 2026-11-16:同时取第一个已设置的商品别名(customAlias),通知第一行展示
             var imageUrl = ""
             var itemCount = 0
+            var alias = ""
             try {
                 val items = p.getAsJsonArray("items")
                 if (items != null) {
@@ -613,6 +616,10 @@ class NewOrderNotifyService : Service() {
                         if (imageUrl.isBlank()) {
                             val url = it.optString("picUrl")
                             if (url.isNotBlank()) imageUrl = url
+                        }
+                        if (alias.isBlank()) {
+                            val a = it.optString("customAlias")
+                            if (a.isNotBlank()) alias = a
                         }
                     }
                 }
@@ -626,7 +633,8 @@ class NewOrderNotifyService : Service() {
                     amount = p.optDouble("orderAmount"),
                     itemCount = itemCount,
                     machineName = machineName,
-                    productImageUrl = imageUrl
+                    productImageUrl = imageUrl,
+                    productAlias = alias
                 )
             )
         }
@@ -657,18 +665,22 @@ class NewOrderNotifyService : Service() {
                 timeZone = TimeZone.getTimeZone("Asia/Shanghai")
             }.format(System.currentTimeMillis())
 
-            // 第一行：通知类型 店铺名 货件号
-            val title = buildString {
+            // 第一行(2026-11-16 用户要求):新订单 店铺名 商品别名 x数量 订单总金额
+            val head = buildString {
                 append("新订单")
                 if (o.storeName.isNotBlank()) append(" ").append(o.storeName)
-                if (o.postingNumber.isNotBlank()) append(" ").append(o.postingNumber)
+                if (o.productAlias.isNotBlank()) append(" ").append(o.productAlias)
             }
-            // 第二行：xN ￥金额
-            val secondLine = formatItemAmountLine(o.itemCount, o.amount)
-            val summary = "$secondLine · $timeText" + suffix
+            val amountLine = formatItemAmountLine(o.itemCount, o.amount) // "xN ￥19.00"/"￥19.00"
+            val title = if (o.itemCount > 0) "$head $amountLine" else head
+            // 第二行:货件号 通知时间
+            val summary = buildString {
+                if (o.postingNumber.isNotBlank()) append(o.postingNumber).append(" ")
+                append(timeText)
+            } + suffix
             val bigText = buildString {
                 append(title)
-                append("\n").append(secondLine)
+                append("\n").append(summary)
                 append("\n当前待处理订单 ").append(total).append(" 个，点击查看")
                 if (machine.isNotBlank()) append("\n[机器: ").append(machine).append("]")
             }

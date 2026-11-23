@@ -545,6 +545,52 @@ class OrderDetailActivity : ComponentActivity() {
         }
     }
 
+    /** 设置/清除本系统商品别名(2026-11-16):弹窗输入,留空或点「清除」=清除别名 */
+    private fun editSkuAlias(item: com.yochylin.scanner.model.PkgItem) {
+        val sku = item.sku
+        if (sku.isNullOrBlank()) {
+            toast("该商品无 SKU,无法维护别名")
+            return
+        }
+        val input = EditText(this).apply {
+            hint = "商品别名,留空清除"
+            inputType = InputType.TYPE_CLASS_TEXT
+            setText(item.customAlias ?: "")
+        }
+        AlertDialog.Builder(this)
+            .setTitle("设置商品别名")
+            .setMessage("SKU $sku\n别名用于新订单通知与列表展示")
+            .setView(input)
+            .setPositiveButton("保存") { _, _ ->
+                setSkuAlias(item, input.text.toString().trim().ifBlank { null })
+            }
+            .setNeutralButton("清除") { _, _ -> setSkuAlias(item, null) }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun setSkuAlias(item: com.yochylin.scanner.model.PkgItem, alias: String?) {
+        val sku = item.sku ?: return
+        lifecycleScope.launch {
+            try {
+                Api.put(
+                    "/admin/api/order-process/sku-alias/" + URLEncoder.encode(sku, "UTF-8"),
+                    mapOf("alias" to alias)
+                )
+                item.customAlias = alias
+                toast(if (alias != null) "已设置别名「$alias」" else "已清除别名")
+                loadDetail()
+            } catch (e: Exception) {
+                if (e is ApiException && e.code == 401) {
+                    toast("登录已过期,请重新登录")
+                    goLogin()
+                } else {
+                    toast(e.message ?: "设置别名失败")
+                }
+            }
+        }
+    }
+
     // ── 渲染 ──
     private fun render(detail: OrderDetail) {
         val p = detail.`package` ?: return
@@ -1004,6 +1050,28 @@ class OrderDetailActivity : ComponentActivity() {
             }
         )
         right.addView(weightRow)
+
+        // 本系统别名行(2026-11-16):展示当前别名,点击设置/清除
+        val aliasRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(4), 0, 0)
+        }
+        val aliasTv = TextView(this).apply {
+            text = "别名 ${item.customAlias?.takeIf { it.isNotBlank() } ?: "—"}"
+            setTextColor(Color.parseColor(COLOR_TEXT))
+            textSize = 11f
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        aliasRow.addView(aliasTv)
+        aliasRow.addView(
+            copyChip("设置", Color.parseColor("#eef4ff"), Color.parseColor("#165dff")) {
+                editSkuAlias(item)
+            }
+        )
+        right.addView(aliasRow)
 
         // 跟卖快照行(2026-10-27):展示下单时的跟卖快照,对比出售价与跟卖
         val snap = item.sku?.trim()?.let { pwSnapMap[it] }

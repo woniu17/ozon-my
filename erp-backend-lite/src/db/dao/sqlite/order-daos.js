@@ -1506,6 +1506,7 @@ function getItemsByOrderIds(orderIds) {
               ) AS pic_url,
               json_extract(p.data, '$.name') AS cached_name,
               p.custom_weight_g AS custom_weight_g,
+              p.custom_alias AS custom_alias,
               json_extract(pac.attributes_data, '$.weight') AS ozon_weight_g
        FROM op_ozon_order_item oi
        LEFT JOIN product_data_cache p ON p.sku = CAST(oi.sku AS TEXT)
@@ -1528,6 +1529,8 @@ function getItemsByOrderIds(orderIds) {
     purchaseNum: r.purchase_num,
     // 本系统维护重量/Ozon后台重量(2026-11):订单处理详情页按 SKU 设置本系统重量时展示
     customWeightG: r.custom_weight_g != null ? Number(r.custom_weight_g) : null,
+    // 本系统商品别名(2026-11-16):订单详情设置,通知/展示用
+    customAlias: r.custom_alias || null,
     ozonWeightG: r.ozon_weight_g != null ? Number(r.ozon_weight_g) : null,
   }));
 }
