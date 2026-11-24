@@ -435,6 +435,9 @@ fun Context.buildMultiItemConfirmDialog(
         val eligible = sa.splitEligible
         // 拆包是否省钱:后端 saving 与 saveCny 同源,这里再防御一次(saveCny<=0 视为不省)
         val saving = sa.saving && (sa.saveCny ?: 0.0) > 0
+        // 2026-11-16:整件与拆包后各包裹同属一个等级(如都"超轻小件")时,提示简洁"不拆单"
+        val sameGroup = eligible && sa.whole?.groupName != null &&
+            sa.best?.packages?.let { pkgs -> pkgs.isNotEmpty() && pkgs.all { it.groupName == sa.whole?.groupName } } == true
         val note: String
         val mainColor: Int
         val bgColor: Int
@@ -447,6 +450,12 @@ fun Context.buildMultiItemConfirmDialog(
                     else -> "不可拆"
                 }
                 conclusion = null
+                mainColor = 0xFF165DFF.toInt()
+                bgColor = 0xFFEEF4FF.toInt()
+            }
+            sameGroup -> {
+                note = "同等级"
+                conclusion = "不拆单,整件与拆单同属一等级"
                 mainColor = 0xFF165DFF.toInt()
                 bgColor = 0xFFEEF4FF.toInt()
             }
