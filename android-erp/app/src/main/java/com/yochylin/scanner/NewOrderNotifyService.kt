@@ -666,10 +666,11 @@ class NewOrderNotifyService : Service() {
             }.format(System.currentTimeMillis())
 
             // 第一行(2026-11-16 用户要求):新订单 店铺名 商品别名 x数量 订单总金额
+            // 无商品别名时用"未命名"占位,保证格式稳定
             val head = buildString {
                 append("新订单")
                 if (o.storeName.isNotBlank()) append(" ").append(o.storeName)
-                if (o.productAlias.isNotBlank()) append(" ").append(o.productAlias)
+                append(" ").append(o.productAlias.ifBlank { "未命名" })
             }
             val amountLine = formatItemAmountLine(o.itemCount, o.amount) // "xN ￥19.00"/"￥19.00"
             val title = if (o.itemCount > 0) "$head $amountLine" else head
