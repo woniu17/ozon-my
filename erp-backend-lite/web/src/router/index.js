@@ -27,6 +27,7 @@ import EndpointMetrics from '../views/EndpointMetrics.vue';
 import TaskLogs from '../views/TaskLogs.vue';
 import PriceWatch from '../views/PriceWatch.vue';
 import OrderProcess from '../views/OrderProcess.vue';
+import PrePurchase from '../views/PrePurchase.vue';
 import OrderStats from '../views/OrderStats.vue';
 import FinanceStats from '../views/FinanceStats.vue';
 import ScanShip from '../views/ScanShip.vue';
@@ -73,6 +74,7 @@ const router = createRouter({
     { path: '/endpoint-metrics', name: 'endpoint-metrics', component: EndpointMetrics, meta: { title: '端点耗时' } },
     { path: '/task-logs', name: 'task-logs', component: TaskLogs, meta: { title: '定时任务日志' } },
     { path: '/price-watch', name: 'price-watch', component: PriceWatch, meta: { title: '价格优势' } },
+    { path: '/pre-purchase', name: 'pre-purchase', component: PrePurchase, meta: { title: '预采购' } },
     { path: '/order-process', name: 'order-process', component: OrderProcess, meta: { title: '订单处理' } },
     { path: '/order-stats', name: 'order-stats', component: OrderStats, meta: { title: '订单统计' } },
     { path: '/finance-stats', name: 'finance-stats', component: FinanceStats, meta: { title: '财务统计' } },

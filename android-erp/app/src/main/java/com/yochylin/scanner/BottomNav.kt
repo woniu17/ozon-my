@@ -25,6 +25,7 @@ fun setupBottomNav(activity: Activity, active: String) {
         BottomNavItem(R.id.navShipPhoto, R.id.navShipPhotoIcon, R.id.navShipPhotoText, "shipPhoto"),
         BottomNavItem(R.id.navContainer, R.id.navContainerIcon, R.id.navContainerText, "container"),
         BottomNavItem(R.id.navOrder, R.id.navOrderIcon, R.id.navOrderText, "order"),
+        BottomNavItem(R.id.navPrePurchase, R.id.navPrePurchaseIcon, R.id.navPrePurchaseText, "prePurchase"),
         BottomNavItem(R.id.navFinance, R.id.navFinanceIcon, R.id.navFinanceText, "finance"),
         BottomNavItem(R.id.navStats, R.id.navStatsIcon, R.id.navStatsText, "stats"),
         BottomNavItem(R.id.navHealth, R.id.navHealthIcon, R.id.navHealthText, "health")

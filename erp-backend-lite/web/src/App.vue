@@ -17,6 +17,7 @@ const navGroups = [
     label: '工作台',
     items: [
       { key: '/store-health', label: '店铺健康' },
+      { key: '/pre-purchase', label: '预采购' },
       { key: '/order-process', label: '订单处理' },
       { key: '/scan-stock', label: '扫描入库' },
       { key: '/scan-ship', label: '扫描打单' },

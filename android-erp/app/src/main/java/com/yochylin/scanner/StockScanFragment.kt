@@ -43,6 +43,8 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import com.yochylin.scanner.api.Api
 import com.yochylin.scanner.api.optBoolean
+import com.yochylin.scanner.api.optLong
+import com.yochylin.scanner.api.optString
 import com.yochylin.scanner.model.PackageListResponse
 import com.yochylin.scanner.model.Pkg
 import kotlinx.coroutines.launch
@@ -339,6 +341,8 @@ class StockScanFragment : Fragment() {
             return
         }
         reportLog("scan_search_start", "全局搜索订单", code = code)
+        // 2026-11-16:扫到预采购快递单号时弹二次确认签收(并行,不阻断原入库主流程)
+        checkPrePurchaseReceive(code)
         viewLifecycleOwner.lifecycleScope.launch {
             try {
                 val data = Api.get(
@@ -429,6 +433,58 @@ class StockScanFragment : Fragment() {
                 playFeedback(false)
                 reportLog("scan_search_failed", "查询失败:${e.message ?: e.javaClass.simpleName}", code = code, result = "failed")
                 updateStats()
+            }
+        }
+    }
+
+    /** 扫到快递单号时查预采购;命中待收货预采购则弹二次确认签收(2026-11-16) */
+    private fun checkPrePurchaseReceive(code: String) {
+        viewLifecycleOwner.lifecycleScope.launch {
+            try {
+                val data = Api.post(
+                    "/admin/api/pre-purchase/receive-by-code",
+                    mapOf("logisticsNo" to code)
+                ).asJsonObject
+                val arr = data.getAsJsonArray("matches") ?: return@launch
+                if (arr.size() == 0) return@launch
+                val ids = mutableListOf<Long>()
+                val desc = StringBuilder()
+                for (el in arr) {
+                    val o = el.asJsonObject
+                    val id = o.optLong("id")
+                    ids.add(id)
+                    if (desc.isNotEmpty()) desc.append("\n")
+                    desc.append(o.optString("purchaseSn").ifBlank { "#$id" })
+                    val name = o.getAsJsonArray("items")?.firstOrNull()?.asJsonObject
+                        ?.optString("goodsName") ?: ""
+                    if (name.isNotBlank()) desc.append(" · ").append(name)
+                }
+                AlertDialog.Builder(requireContext())
+                    .setTitle("预采购确认签收")
+                    .setMessage("发现待收货预采购订单:\n$desc\n\n是否确认签收?")
+                    .setPositiveButton("确认签收") { _, _ ->
+                        viewLifecycleOwner.lifecycleScope.launch {
+                            try {
+                                Api.post(
+                                    "/admin/api/pre-purchase/receive",
+                                    mapOf("ids" to ids, "by" to "scan")
+                                )
+                                android.widget.Toast.makeText(
+                                    requireContext(), "已签收 ${ids.size} 笔预采购",
+                                    android.widget.Toast.LENGTH_SHORT
+                                ).show()
+                            } catch (e: Exception) {
+                                android.widget.Toast.makeText(
+                                    requireContext(), e.message ?: "预采购签收失败",
+                                    android.widget.Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        }
+                    }
+                    .setNegativeButton("取消", null)
+                    .show()
+            } catch (_: Exception) {
+                // 预采购查询失败不影响入库主流程
             }
         }
     }

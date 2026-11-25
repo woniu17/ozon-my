@@ -157,6 +157,7 @@ class MainShellActivity : FragmentActivity(), TabHost {
         return fragments.getOrPut(tab) {
             when (tab) {
                 "order" -> OrderListFragment()
+                "prePurchase" -> PrePurchaseFragment()
                 "finance" -> FinanceFragment()
                 "stats" -> OrderStatsFragment()
                 "health" -> StoreHealthFragment()

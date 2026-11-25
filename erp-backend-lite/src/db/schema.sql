@@ -1387,3 +1387,31 @@ CREATE TABLE IF NOT EXISTS op_order_log (
 CREATE INDEX IF NOT EXISTS idx_op_order_log_pkg     ON op_order_log(package_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_op_order_log_posting ON op_order_log(store_id, posting_number, id DESC);
 CREATE INDEX IF NOT EXISTS idx_op_order_log_created ON op_order_log(created_at DESC);
+
+-- 预采购订单(2026-11-16):提前采购、暂不绑定 Ozon 订单;到货后扫描快递单号签收。
+-- 与 op_purchase_order(已关联 Ozon 包裹的采购)独立,避免混淆。
+CREATE TABLE IF NOT EXISTS op_pre_purchase (
+  id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+  platform             TEXT,              -- 采购平台 pdd/1688/taobao/xianyu/other
+  purchase_sn          TEXT,              -- 采购单号
+  buyer_account        TEXT,              -- 采购买家账号
+  buyer_user_id        TEXT,
+  seller_name          TEXT,              -- 采购卖家
+  payment_amount       REAL DEFAULT 0,    -- 采购金额(CNY)
+  goods_amount         REAL DEFAULT 0,
+  items_json           TEXT,              -- 商品明细(平台商品图片/规格/数量)
+  platform_goods_json  TEXT,              -- 平台订单商品原始
+  logistics_company    TEXT,
+  logistics_no         TEXT,              -- 快递单号(签收匹配键,可逗号分隔多单号)
+  po_status            TEXT,              -- 平台采购状态(待付款/待发货/已发货/已签收等)
+  pay_at               TEXT,
+  note                 TEXT,
+  receive_status       TEXT NOT NULL DEFAULT 'pending', -- pending=待收货 / received=已签收
+  received_at          TEXT,              -- 签收时间(UTC ISO)
+  received_by          TEXT,              -- 签收方式 scan/manual
+  created_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+  updated_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_op_pre_purchase_status    ON op_pre_purchase(receive_status);
+CREATE INDEX IF NOT EXISTS idx_op_pre_purchase_logistics ON op_pre_purchase(logistics_no);
+CREATE INDEX IF NOT EXISTS idx_op_pre_purchase_sn        ON op_pre_purchase(platform, purchase_sn);

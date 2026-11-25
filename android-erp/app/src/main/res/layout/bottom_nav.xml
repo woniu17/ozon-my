@@ -138,6 +138,32 @@
             android:layout_marginTop="2dp" />
     </LinearLayout>
 
+    <!-- 预采购(2026-11-16,放在订单处理右边) -->
+    <LinearLayout
+        android:id="@+id/navPrePurchase"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:background="@android:color/transparent">
+
+        <ImageView
+            android:id="@+id/navPrePurchaseIcon"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:src="@drawable/ic_nav_prepurchase" />
+
+        <TextView
+            android:id="@+id/navPrePurchaseText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="预采购"
+            android:textSize="10sp"
+            android:textColor="#86909c"
+            android:layout_marginTop="2dp" />
+    </LinearLayout>
+
     <!-- 财务统计 -->
     <LinearLayout
         android:id="@+id/navFinance"
