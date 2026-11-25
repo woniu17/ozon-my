@@ -276,9 +276,11 @@ class PrePurchaseFragment : Fragment() {
             setPadding(0, dp(4), 0, 0)
         }
         meta.addView(TextView(ctx).apply {
-            text = "快递:${row.logisticsCompany} ${row.logisticsNo.ifBlank { "—" }} · ${fmtMoney(row.paymentAmount)}"
+            text = "快递公司:${row.logisticsCompany.ifBlank { "—" }} · 快递单号:${row.logisticsNo.ifBlank { "—" }} · ${fmtMoney(row.paymentAmount)}"
             setTextColor(Color.parseColor("#86909c"))
             textSize = 11f
+            maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.END
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         })
         if (row.receiveStatus == "pending") {
@@ -302,11 +304,18 @@ class PrePurchaseFragment : Fragment() {
         // 物流轨迹(2026-11-16):最新一条 + 展开全部
         if (row.lastTraceDesc.isNotBlank()) {
             card.addView(TextView(ctx).apply {
-                text = "最新:${fmtTime(row.lastTraceAt)} ${row.lastTraceDesc}"
+                text = "最新轨迹:${fmtTime(row.lastTraceAt)} ${row.lastTraceDesc}"
                 setTextColor(Color.parseColor("#4e5969"))
                 textSize = 11f
                 maxLines = 2
                 ellipsize = android.text.TextUtils.TruncateAt.END
+                setPadding(0, dp(4), 0, 0)
+            })
+        } else {
+            card.addView(TextView(ctx).apply {
+                text = "暂无轨迹"
+                setTextColor(Color.parseColor("#a6abb3"))
+                textSize = 11f
                 setPadding(0, dp(4), 0, 0)
             })
         }

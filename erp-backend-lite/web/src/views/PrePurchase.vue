@@ -47,8 +47,10 @@
             <td><span class="platform-tag">{{ platformLabel(row.platform) }}</span></td>
             <td class="mono">{{ row.purchaseSn || '—' }}</td>
             <td class="logi-cell">
-              <div class="mono">{{ (row.logisticsCompany || '') }} {{ row.logisticsNo || '—' }}</div>
-              <div v-if="row.lastTraceDesc" class="muted trace-latest" :title="row.lastTraceDesc">{{ fmtTime(row.lastTraceAt) }} {{ row.lastTraceDesc }}</div>
+              <div class="mono">快递公司:{{ row.logisticsCompany || '—' }}</div>
+              <div class="mono">快递单号:{{ row.logisticsNo || '—' }}</div>
+              <div v-if="row.lastTraceDesc" class="muted trace-latest" :title="row.lastTraceDesc">最新轨迹:{{ fmtTime(row.lastTraceAt) }} {{ row.lastTraceDesc }}</div>
+              <div v-else class="muted">暂无轨迹</div>
               <div v-if="(row.trace || []).length" class="trace-toggle" @click="toggleTrace(row.id)">
                 {{ expanded[row.id] ? '收起轨迹' : `展开轨迹(${row.trace.length})` }}
               </div>

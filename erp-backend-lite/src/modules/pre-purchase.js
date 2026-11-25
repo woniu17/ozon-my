@@ -10,12 +10,13 @@
 //   POST /admin/api/pre-purchase/receive-by-code 扫描签收用:按快递单号查 pending 预采购(不签收)
 //   DELETE /admin/api/pre-purchase/delete/:id    删除
 import { Router } from 'express';
+import config from '../config/index.js';
 import { db } from '../db/index.js';
 import { ok } from '../utils/response.js';
 import { ApiError, ErrorCode } from '../utils/error-codes.js';
 import { imageCacheUrlFor } from '../services/order-image-cache.js';
 import logger from '../middleware/log.js';
-import { getTraceForOrder, hasAliOpenApiToken } from '../services/platform-orders/adapters/ali1688-openapi.js';
+import { getTraceForOrder, getLogisticsForOrder, hasAliOpenApiToken } from '../services/platform-orders/adapters/ali1688-openapi.js';
 import { getPddTrace } from '../services/platform-orders/adapters/pdd.js';
 import { getTaobaoTrace } from '../services/platform-orders/adapters/taobao.js';
 import { getXianyuTrace } from '../services/platform-orders/adapters/xianyu.js';
@@ -283,26 +284,51 @@ let traceSyncing = false;
 let traceLastRun = null;
 let traceLastResult = null;
 
+/** 账号解析(2026-11-25):buyer_account 常为空(平台订单列表不回带账号),直接传给
+ *  浏览器管理器会抛 "未知账号别名" 导致轨迹/公司名永远拉不到;按平台回落到已配置账号
+ *  (与 purchase-logistics-poller 阶段C 同策略)。1688 优先选带 OpenAPI token 的账号。 */
+function resolveAccount(platform, account) {
+  const key = platform === 'yangkeduo' || platform === 'pdd' ? 'pdd'
+    : platform === '1688' || platform === 'ali1688' ? 'ali1688'
+    : platform === 'taobao' ? 'taobao'
+    : platform === 'xianyu' ? 'xianyu' : '';
+  const list = (key && config.platformAccounts[key]) || [];
+  if (account && list.includes(account)) return account;
+  if (key === 'ali1688') return list.find((a) => hasAliOpenApiToken(a)) || list[0] || '';
+  return list[0] || '';
+}
+
 async function fetchTraceForRow(row) {
   const platform = String(row.platform || '');
   const sn = row.purchase_sn;
-  const account = row.buyer_account || '';
+  const account = resolveAccount(platform, row.buyer_account || '');
   if (!sn) return null;
   try {
     if (platform === 'yangkeduo' || platform === 'pdd') {
+      if (!account) return null;
       const r = await getPddTrace(sn, row.logistics_no, account);
       return { steps: r?.steps || [], shippingName: r?.shippingName, trackingNumber: r?.trackingNumber };
     }
     if (platform === '1688' || platform === 'ali1688') {
       if (!hasAliOpenApiToken(account)) return null;
+      // 单号/公司可能创建时缺失(OpenAPI 列表不带物流):补查一次,失败不影响轨迹
+      let shippingName = '';
+      let trackingNumber = '';
+      try {
+        const info = await getLogisticsForOrder(sn, account);
+        shippingName = info.logisticsCompany || '';
+        trackingNumber = info.logisticsNo || '';
+      } catch { /* 未发货/接口限流:跳过 */ }
       const r = await getTraceForOrder(sn, account);
-      return { steps: r?.steps || [] };
+      return { steps: r?.steps || [], shippingName, trackingNumber };
     }
     if (platform === 'taobao') {
+      if (!account) return null;
       const r = await getTaobaoTrace(sn, account);
       return { steps: r?.steps || [], shippingName: r?.shippingName, trackingNumber: r?.expressId };
     }
     if (platform === 'xianyu') {
+      if (!account) return null;
       const r = await getXianyuTrace(sn, account);
       return { steps: r?.steps || [], shippingName: r?.shippingName, trackingNumber: r?.trackingNumber };
     }
