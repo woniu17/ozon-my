@@ -12,19 +12,62 @@
         android:background="#ffffff"
         android:padding="10dp">
 
+        <!-- 平台 tabs -->
+        <HorizontalScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:scrollbars="none">
+            <LinearLayout
+                android:id="@+id/ppcPlatformTabs"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal" />
+        </HorizontalScrollView>
+
+        <!-- 账号 tabs(1688 多账号) -->
+        <HorizontalScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:scrollbars="none">
+            <LinearLayout
+                android:id="@+id/ppcAccountTabs"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal" />
+        </HorizontalScrollView>
+
+        <!-- 搜索行 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal">
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginTop="8dp">
 
-            <TextView android:id="@+id/ppcPlatPdd" android:layout_width="0dp" android:layout_height="36dp"
-                android:layout_weight="1" android:gravity="center" android:text="拼多多" android:textSize="13sp" android:textColor="#86909c" />
-            <TextView android:id="@+id/ppcPlat1688" android:layout_width="0dp" android:layout_height="36dp"
-                android:layout_weight="1" android:gravity="center" android:text="1688" android:textSize="13sp" android:textColor="#86909c" />
-            <TextView android:id="@+id/ppcPlatTaobao" android:layout_width="0dp" android:layout_height="36dp"
-                android:layout_weight="1" android:gravity="center" android:text="淘宝" android:textSize="13sp" android:textColor="#86909c" />
-            <TextView android:id="@+id/ppcPlatXianyu" android:layout_width="0dp" android:layout_height="36dp"
-                android:layout_weight="1" android:gravity="center" android:text="闲鱼" android:textSize="13sp" android:textColor="#86909c" />
+            <EditText
+                android:id="@+id/ppcSearchInput"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:hint="输入订单号精确搜索"
+                android:textSize="13sp"
+                android:background="#f7f8fa"
+                android:paddingHorizontal="10dp"
+                android:imeOptions="actionSearch"
+                android:inputType="text" />
+
+            <TextView
+                android:id="@+id/ppcSearchBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:layout_marginStart="8dp"
+                android:gravity="center"
+                android:paddingHorizontal="16dp"
+                android:text="搜索"
+                android:textSize="13sp"
+                android:textColor="#ffffff"
+                android:background="#165dff" />
         </LinearLayout>
 
         <LinearLayout
@@ -34,11 +77,24 @@
             android:gravity="center_vertical"
             android:layout_marginTop="8dp">
 
-            <TextView android:id="@+id/ppcHint" android:layout_width="0dp" android:layout_height="wrap_content"
-                android:layout_weight="1" android:text="选择平台订单" android:textColor="#86909c" android:textSize="12sp" />
-            <TextView android:id="@+id/ppcRefresh" android:layout_width="wrap_content" android:layout_height="32dp"
-                android:gravity="center" android:paddingHorizontal="16dp" android:text="刷新" android:textSize="13sp"
-                android:textColor="#165dff" android:background="#e8f3ff" />
+            <TextView
+                android:id="@+id/ppcHint"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="选择平台订单"
+                android:textColor="#86909c"
+                android:textSize="12sp" />
+            <TextView
+                android:id="@+id/ppcRefresh"
+                android:layout_width="wrap_content"
+                android:layout_height="32dp"
+                android:gravity="center"
+                android:paddingHorizontal="16dp"
+                android:text="刷新"
+                android:textSize="13sp"
+                android:textColor="#165dff"
+                android:background="#e8f3ff" />
         </LinearLayout>
     </LinearLayout>
 
@@ -63,11 +119,26 @@
         android:background="#ffffff"
         android:padding="10dp">
 
-        <TextView android:id="@+id/ppcCancel" android:layout_width="0dp" android:layout_height="44dp"
-            android:layout_weight="1" android:gravity="center" android:text="取消" android:textColor="#4e5969"
-            android:textSize="14sp" android:background="#f2f3f5" />
-        <TextView android:id="@+id/ppcSubmit" android:layout_width="0dp" android:layout_height="44dp"
-            android:layout_weight="1" android:layout_marginStart="10dp" android:gravity="center"
-            android:text="提交预采购" android:textColor="#ffffff" android:textSize="14sp" android:background="#165dff" />
+        <TextView
+            android:id="@+id/ppcCancel"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="取消"
+            android:textColor="#4e5969"
+            android:textSize="14sp"
+            android:background="#f2f3f5" />
+        <TextView
+            android:id="@+id/ppcSubmit"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_weight="1"
+            android:layout_marginStart="10dp"
+            android:gravity="center"
+            android:text="提交预采购"
+            android:textColor="#ffffff"
+            android:textSize="14sp"
+            android:background="#165dff" />
     </LinearLayout>
 </LinearLayout>
