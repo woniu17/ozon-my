@@ -19,6 +19,7 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import coil.load
 import com.yochylin.scanner.api.Api
+import com.yochylin.scanner.api.optBoolean
 import com.yochylin.scanner.api.optDouble
 import com.yochylin.scanner.api.optInt
 import com.yochylin.scanner.api.optLong
@@ -284,6 +285,19 @@ class PrePurchaseFragment : Fragment() {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         })
         if (row.receiveStatus == "pending") {
+            // 更新物流(2026-11-25):签收左边,单行立即拉取轨迹+快递公司/单号
+            meta.addView(TextView(ctx).apply {
+                text = "更新物流"
+                setTextColor(Color.parseColor("#165dff"))
+                textSize = 12f
+                setRoundedBg(Color.parseColor("#e8f3ff"), 8f)
+                setPadding(dp(12), dp(5), dp(12), dp(5))
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { rightMargin = dp(6) }
+                setOnClickListener { updateLogistics(row) }
+            })
             meta.addView(TextView(ctx).apply {
                 text = "签收"
                 setTextColor(Color.WHITE)
@@ -413,6 +427,38 @@ class PrePurchaseFragment : Fragment() {
 
     private fun manualReceive(row: Row) {
         confirmReceive(listOf(row.id))
+    }
+
+    private var updatingId: Long? = null
+
+    /** 单行更新物流:立即拉取该预采购的轨迹 + 快递公司/单号,完成后刷新列表 */
+    private fun updateLogistics(row: Row) {
+        if (updatingId != null) {
+            toast("正在更新物流,请稍候…")
+            return
+        }
+        updatingId = row.id
+        toast("正在更新物流…")
+        viewLifecycleOwner.lifecycleScope.launch {
+            try {
+                val data = Api.post(
+                    "/admin/api/pre-purchase/sync-trace-row/${row.id}",
+                    emptyMap<String, Any?>()
+                ).asJsonObject
+                val d = data.getAsJsonObject("data") ?: data
+                if (d.optBoolean("updated", false)) {
+                    val steps = d.optInt("steps", 0)
+                    toast(if (steps > 0) "物流已更新($steps 条轨迹)" else "已更新快递公司/单号")
+                } else {
+                    toast(d.optString("message").ifBlank { "暂无物流信息(可能未发货或平台登录态失效)" })
+                }
+                loadList()
+            } catch (e: Exception) {
+                toast(e.message ?: "更新失败")
+            } finally {
+                updatingId = null
+            }
+        }
     }
 
     // ── 工具 ──

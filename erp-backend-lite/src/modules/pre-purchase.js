@@ -338,6 +338,36 @@ async function fetchTraceForRow(row) {
   return null;
 }
 
+/** 平台查询结果写库(2026-11-25 从批量同步抽出,单行"更新物流"复用):
+ *  轨迹非空才覆盖轨迹;公司名有值且库中为空时回填;单号仅在库中为空时回填
+ *  (保留用户手填签收匹配键)。返回 { updated, steps, logisticsCompany, logisticsNo } */
+function writeTraceForRow(r, t) {
+  if (!t) return { updated: false, steps: 0 };
+  const steps = Array.isArray(t.steps) ? t.steps : [];
+  const shippingName = String(t.shippingName || '').trim();
+  const trackingNumber = String(t.trackingNumber || '').trim();
+  if (!steps.length && !shippingName && !trackingNumber) return { updated: false, steps: 0 };
+  const sets = [];
+  const args = [];
+  if (steps.length) {
+    const latest = steps[0] || {};
+    sets.push('trace_json = ?', 'last_trace_at = ?', 'last_trace_desc = ?');
+    args.push(JSON.stringify(steps), latest.acceptTime || null, String(latest.remark || '').slice(0, 500));
+  }
+  if (!r.logistics_no && trackingNumber) { sets.push('logistics_no = ?'); args.push(trackingNumber); }
+  if (shippingName) { sets.push("logistics_company = COALESCE(NULLIF(logistics_company, ''), ?)"); args.push(shippingName); }
+  if (!sets.length) return { updated: false, steps: 0 };
+  sets.push('updated_at = ?');
+  args.push(nowIso(), r.id);
+  db.prepare(`UPDATE op_pre_purchase SET ${sets.join(', ')} WHERE id = ?`).run(...args);
+  return {
+    updated: true,
+    steps: steps.length,
+    logisticsCompany: r.logistics_company || shippingName || '',
+    logisticsNo: r.logistics_no || trackingNumber || '',
+  };
+}
+
 async function runPrePurchaseTraceSync() {
   if (traceSyncing) return { running: true };
   traceSyncing = true;
@@ -354,16 +384,8 @@ async function runPrePurchaseTraceSync() {
     scanned = rows.length;
     for (const r of rows) {
       const t = await fetchTraceForRow(r);
-      if (t && Array.isArray(t.steps) && t.steps.length) {
-        const latest = t.steps[0] || {};
-        const now = nowIso();
-        const sets = ['trace_json = ?', 'last_trace_at = ?', 'last_trace_desc = ?', 'updated_at = ?'];
-        const args = [JSON.stringify(t.steps), latest.acceptTime || null, String(latest.remark || '').slice(0, 500), now];
-        // 物流单号仅在库中为空时回填(保留用户手填签收匹配键)
-        if (!r.logistics_no && t.trackingNumber) { sets.push('logistics_no = ?'); args.push(String(t.trackingNumber)); }
-        if (t.shippingName) { sets.push("logistics_company = COALESCE(NULLIF(logistics_company, ''), ?)"); args.push(String(t.shippingName)); }
-        args.push(r.id);
-        db.prepare(`UPDATE op_pre_purchase SET ${sets.join(', ')} WHERE id = ?`).run(...args);
+      const res = writeTraceForRow(r, t);
+      if (res.updated) {
         updated++;
       } else {
         failed++;
@@ -384,6 +406,27 @@ async function runPrePurchaseTraceSync() {
 router.post('/admin/api/pre-purchase/sync-trace', (_req, res) => {
   runPrePurchaseTraceSync().catch(() => {});
   res.json(ok({ started: true }));
+});
+
+// 单行更新物流(列表"更新物流"按钮,2026-11-25):立即拉取该行轨迹+快递公司/单号
+router.post('/admin/api/pre-purchase/sync-trace-row/:id', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const row = db
+      .prepare(
+        `SELECT id, platform, purchase_sn, buyer_account, logistics_no, logistics_company
+         FROM op_pre_purchase WHERE id = ?`
+      )
+      .get(id);
+    if (!row) throw new ApiError(ErrorCode.RESOURCE_NOT_FOUND, '预采购不存在');
+    const t = await fetchTraceForRow(row);
+    const result = writeTraceForRow(row, t);
+    if (!result.updated) {
+      res.json(ok({ id, updated: false, steps: 0, message: '暂无物流信息(可能未发货或平台登录态失效)' }));
+      return;
+    }
+    res.json(ok({ id, ...result }));
+  } catch (e) { next(e); }
 });
 
 // 轨迹同步状态(前端轮询)

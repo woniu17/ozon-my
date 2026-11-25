@@ -41,6 +41,11 @@ export function syncTrace() {
   return request.post('/admin/api/pre-purchase/sync-trace', {});
 }
 
+/** 单行更新物流(列表"更新物流"按钮) */
+export function syncTraceRow(id) {
+  return request.post('/admin/api/pre-purchase/sync-trace-row/' + encodeURIComponent(id), {});
+}
+
 /** 物流轨迹同步状态 */
 export function syncTraceStatus() {
   return request.get('/admin/api/pre-purchase/sync-trace-status');

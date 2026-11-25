@@ -80,6 +80,7 @@
             </td>
             <td class="muted">{{ row.receivedAt ? fmtTime(row.receivedAt) : '—' }}</td>
             <td class="ops">
+              <button v-if="row.receiveStatus === 'pending'" class="btn btn-ghost btn-sm" :disabled="updatingRowId === row.id" @click="updateLogistics(row)">{{ updatingRowId === row.id ? '更新中…' : '更新物流' }}</button>
               <button v-if="row.receiveStatus === 'pending'" class="btn btn-primary btn-sm" @click="receiveOne(row)">签收</button>
               <button class="btn btn-danger btn-sm" @click="removeRow(row)">删除</button>
             </td>
@@ -221,7 +222,7 @@ import { ref, reactive, computed, nextTick, onMounted } from 'vue';
 import AppModal from '../components/AppModal.vue';
 import AppPager from '../components/AppPager.vue';
 import { useToast } from '../components/useToast.js';
-import { listPrePurchases, createPrePurchase, deletePrePurchase, receivePrePurchase, receiveByCode, checkLinked, syncTrace } from '../api/pre-purchase.js';
+import { listPrePurchases, createPrePurchase, deletePrePurchase, receivePrePurchase, receiveByCode, checkLinked, syncTrace, syncTraceRow } from '../api/pre-purchase.js';
 import { getPlatformOrders, searchPlatformOrder, getPlatformOrdersStatus } from '../api/order-process.js';
 
 const { show } = useToast();
@@ -279,6 +280,23 @@ async function receiveOne(row) {
 // 物流轨迹展开/收起
 const expanded = reactive({});
 function toggleTrace(id) { expanded[id] = !expanded[id]; }
+
+// 单行更新物流(签收按钮左边)
+const updatingRowId = ref(null);
+async function updateLogistics(row) {
+  updatingRowId.value = row.id;
+  try {
+    const r = await syncTraceRow(row.id);
+    const d = r?.data || r || {};
+    if (d.updated) show(d.steps ? `物流已更新(${d.steps} 条轨迹)` : '已更新快递公司/单号', 'success');
+    else show(d.message || '暂无物流信息(可能未发货或平台登录态失效)', 'error');
+    await loadList();
+  } catch (e) {
+    show(e.message || String(e), 'error');
+  } finally {
+    updatingRowId.value = null;
+  }
+}
 
 // 手动同步物流轨迹
 const syncing = ref(false);
