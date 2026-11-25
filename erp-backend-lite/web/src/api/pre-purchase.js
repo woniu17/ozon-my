@@ -30,3 +30,18 @@ export function receivePrePurchase(body) {
 export function receiveByCode(logisticsNo) {
   return request.post('/admin/api/pre-purchase/receive-by-code', { logisticsNo });
 }
+
+/** 批量检查平台订单是否已关联 Ozon 包裹 items=[{platform,purchaseSn}] */
+export function checkLinked(items) {
+  return request.post('/admin/api/pre-purchase/check-linked', { items });
+}
+
+/** 手动触发物流轨迹同步 */
+export function syncTrace() {
+  return request.post('/admin/api/pre-purchase/sync-trace', {});
+}
+
+/** 物流轨迹同步状态 */
+export function syncTraceStatus() {
+  return request.get('/admin/api/pre-purchase/sync-trace-status');
+}

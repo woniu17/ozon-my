@@ -1404,6 +1404,9 @@ CREATE TABLE IF NOT EXISTS op_pre_purchase (
   logistics_company    TEXT,
   logistics_no         TEXT,              -- 快递单号(签收匹配键,可逗号分隔多单号)
   po_status            TEXT,              -- 平台采购状态(待付款/待发货/已发货/已签收等)
+  trace_json           TEXT,              -- 物流轨迹(完整节点,2026-11-16)
+  last_trace_at        TEXT,              -- 最近轨迹时间
+  last_trace_desc      TEXT,              -- 最近轨迹描述
   pay_at               TEXT,
   note                 TEXT,
   receive_status       TEXT NOT NULL DEFAULT 'pending', -- pending=待收货 / received=已签收

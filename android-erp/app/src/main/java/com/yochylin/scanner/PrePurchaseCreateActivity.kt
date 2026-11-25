@@ -55,6 +55,7 @@ class PrePurchaseCreateActivity : ComponentActivity() {
         val goods: List<JsonObject>,
         var selected: Boolean = false,
         var logisticsEdit: String = "",
+        var linked: Int = 0, // 已在现有采购中关联的 Ozon 包裹数(2026-11-16)
     )
 
     private val orders = mutableListOf<Order>()
@@ -158,6 +159,25 @@ class PrePurchaseCreateActivity : ComponentActivity() {
         }
     }
 
+    /** 标记订单是否已关联 Ozon 包裹(2026-11-16) */
+    private suspend fun markLinked() {
+        if (orders.isEmpty()) return
+        try {
+            val arr = com.google.gson.JsonArray()
+            for (o in orders) {
+                val jo = com.google.gson.JsonObject()
+                jo.addProperty("platform", currentPlatform)
+                jo.addProperty("purchaseSn", o.orderSn)
+                arr.add(jo)
+            }
+            val data = Api.post("/admin/api/pre-purchase/check-linked", mapOf("items" to arr)).asJsonObject
+            val linked = data.getAsJsonObject("linked") ?: return
+            for (o in orders) {
+                o.linked = linked.get("$currentPlatform:${o.orderSn}")?.asInt ?: 0
+            }
+        } catch (_: Exception) { /* 忽略 */ }
+    }
+
     private fun loadOrders() {
         orders.clear()
         listContainer.removeAllViews()
@@ -175,6 +195,7 @@ class PrePurchaseCreateActivity : ComponentActivity() {
                         orders.add(parseOrder(el.asJsonObject, goods))
                     }
                 }
+                markLinked()
                 hintTv.text = if (orders.isEmpty()) "该平台/账号暂无可选订单" else "已选 0 / ${orders.size} 笔订单"
                 renderList()
             } catch (e: Exception) {
@@ -197,6 +218,7 @@ class PrePurchaseCreateActivity : ComponentActivity() {
                     res.asJsonObject.getAsJsonArray("goods")?.forEach { goods.add(it.asJsonObject) }
                     orders.clear()
                     orders.add(parseOrder(res.asJsonObject, goods).also { it.selected = true })
+                    markLinked()
                     hintTv.text = "搜索命中 ${orders.size} 笔"
                     renderList()
                 } else {
@@ -244,12 +266,25 @@ class PrePurchaseCreateActivity : ComponentActivity() {
                 setTextColor(Color.parseColor("#1f2329"))
                 textSize = 12f
                 typeface = Typeface.MONOSPACE
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             })
+            if (o.linked > 0) {
+                head.addView(TextView(this).apply {
+                    text = "已关联包裹"
+                    setTextColor(Color.parseColor("#d97706"))
+                    textSize = 10f
+                    setRoundedBg(Color.parseColor("#fff7e6"), 4f)
+                    setPadding(dp(6), dp(2), dp(6), dp(2))
+                    setOnClickListener { toast("该平台订单已在现有采购中关联了 ${o.linked} 个 Ozon 包裹") }
+                })
+            }
             head.addView(TextView(this).apply {
                 text = "¥" + String.format(java.util.Locale.US, "%.2f", o.amount)
                 setTextColor(Color.parseColor("#f53f3f"))
                 textSize = 12f
+                setPadding(dp(6), 0, 0, 0)
             })
             card.addView(head)
 

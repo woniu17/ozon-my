@@ -39,15 +39,20 @@ class PrePurchaseFragment : Fragment() {
     private var currentTab = "all"
     private val rows = mutableListOf<Row>()
 
+    private data class TraceNode(val acceptTime: String, val remark: String)
     private data class Row(
         val id: Long,
         val platform: String,
         val purchaseSn: String,
+        val logisticsCompany: String,
         val logisticsNo: String,
         val paymentAmount: Double,
         val receiveStatus: String,
         val receivedAt: String,
         val itemSummary: String,
+        val trace: List<TraceNode>,
+        val lastTraceAt: String,
+        val lastTraceDesc: String,
     )
 
     private val scanLauncher = registerForActivityResult(
@@ -133,16 +138,25 @@ class PrePurchaseFragment : Fragment() {
                                 }
                             }
                         }
+                        val trace = mutableListOf<TraceNode>()
+                        o.getAsJsonArray("trace")?.forEach { tel ->
+                            val to = tel.asJsonObject
+                            trace.add(TraceNode(to.optString("acceptTime"), to.optString("remark")))
+                        }
                         rows.add(
                             Row(
                                 id = o.optLong("id"),
                                 platform = o.optString("platform"),
                                 purchaseSn = o.optString("purchaseSn"),
+                                logisticsCompany = o.optString("logisticsCompany"),
                                 logisticsNo = o.optString("logisticsNo"),
                                 paymentAmount = o.optDouble("paymentAmount"),
                                 receiveStatus = o.optString("receiveStatus"),
                                 receivedAt = o.optString("receivedAt"),
                                 itemSummary = summary.toString(),
+                                trace = trace,
+                                lastTraceAt = o.optString("lastTraceAt"),
+                                lastTraceDesc = o.optString("lastTraceDesc"),
                             )
                         )
                     }
@@ -236,7 +250,7 @@ class PrePurchaseFragment : Fragment() {
             setPadding(0, dp(4), 0, 0)
         }
         meta.addView(TextView(ctx).apply {
-            text = "快递:${row.logisticsNo.ifBlank { "—" }} · ${fmtMoney(row.paymentAmount)}"
+            text = "快递:${row.logisticsCompany} ${row.logisticsNo.ifBlank { "—" }} · ${fmtMoney(row.paymentAmount)}"
             setTextColor(Color.parseColor("#86909c"))
             textSize = 11f
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
@@ -258,6 +272,45 @@ class PrePurchaseFragment : Fragment() {
             })
         }
         card.addView(meta)
+
+        // 物流轨迹(2026-11-16):最新一条 + 展开全部
+        if (row.lastTraceDesc.isNotBlank()) {
+            card.addView(TextView(ctx).apply {
+                text = "最新:${fmtTime(row.lastTraceAt)} ${row.lastTraceDesc}"
+                setTextColor(Color.parseColor("#4e5969"))
+                textSize = 11f
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                setPadding(0, dp(4), 0, 0)
+            })
+        }
+        if (row.trace.isNotEmpty()) {
+            val traceBox = LinearLayout(ctx).apply {
+                orientation = LinearLayout.VERTICAL
+                visibility = View.GONE
+                setPadding(0, dp(4), 0, 0)
+            }
+            for (t in row.trace.take(30)) {
+                traceBox.addView(TextView(ctx).apply {
+                    text = "${fmtTime(t.acceptTime)}  ${t.remark}"
+                    setTextColor(Color.parseColor("#86909c"))
+                    textSize = 11f
+                })
+            }
+            val toggle = TextView(ctx).apply {
+                text = "展开轨迹(${row.trace.size})"
+                setTextColor(Color.parseColor("#165dff"))
+                textSize = 12f
+                setPadding(0, dp(4), 0, 0)
+                setOnClickListener {
+                    val show = traceBox.visibility != View.VISIBLE
+                    traceBox.visibility = if (show) View.VISIBLE else View.GONE
+                    text = if (show) "收起轨迹" else "展开轨迹(${row.trace.size})"
+                }
+            }
+            card.addView(toggle)
+            card.addView(traceBox)
+        }
         return card
     }
 

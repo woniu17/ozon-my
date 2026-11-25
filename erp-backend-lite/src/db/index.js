@@ -203,6 +203,23 @@ async function ensureMigrations() {
     db.exec(`ALTER TABLE product_data_cache ADD COLUMN custom_alias TEXT`);
     console.log('[db] migration: added column product_data_cache.custom_alias');
   }
+  // op_pre_purchase 物流轨迹字段(2026-11-16):定时拉取快递轨迹写入
+  try {
+    const opqCols = db.prepare(`PRAGMA table_info(op_pre_purchase)`).all();
+    if (opqCols.length) {
+      const addCol = (name, type) => {
+        if (!opqCols.some((c) => c.name === name)) {
+          db.exec(`ALTER TABLE op_pre_purchase ADD COLUMN ${name} ${type}`);
+          console.log(`[db] migration: added column op_pre_purchase.${name}`);
+        }
+      };
+      addCol('trace_json', 'TEXT');
+      addCol('last_trace_at', 'TEXT');
+      addCol('last_trace_desc', 'TEXT');
+    }
+  } catch (e) {
+    console.error('[db] migration op_pre_purchase trace columns failed:', e?.message || e);
+  }
   // product_data_cache.custom_purchase_price:本系统采购价(CNY),价格管理页维护
   // 与订单实际采购金额相互独立,作为商品维度定价基准(2026-09-18,docs/价格管理-概要设计.md)
   if (!cols.some((c) => c.name === 'custom_purchase_price')) {

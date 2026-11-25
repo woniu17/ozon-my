@@ -8,6 +8,7 @@
       <div class="header-actions">
         <button class="btn btn-primary" @click="openCreate">+ 新增预采购</button>
         <button class="btn btn-ghost" @click="openReceive">扫描签收</button>
+        <button class="btn btn-ghost" :disabled="syncing" @click="doSyncTrace">{{ syncing ? '同步中…' : '同步物流轨迹' }}</button>
       </div>
     </div>
 
@@ -33,7 +34,7 @@
           <tr>
             <th>平台</th>
             <th>采购单号</th>
-            <th>快递单号</th>
+            <th>物流信息 / 轨迹</th>
             <th>商品</th>
             <th class="num">金额</th>
             <th>状态</th>
@@ -45,11 +46,27 @@
           <tr v-for="row in items" :key="row.id">
             <td><span class="platform-tag">{{ platformLabel(row.platform) }}</span></td>
             <td class="mono">{{ row.purchaseSn || '—' }}</td>
-            <td class="mono">{{ row.logisticsNo || '—' }}</td>
+            <td class="logi-cell">
+              <div class="mono">{{ (row.logisticsCompany || '') }} {{ row.logisticsNo || '—' }}</div>
+              <div v-if="row.lastTraceDesc" class="muted trace-latest" :title="row.lastTraceDesc">{{ fmtTime(row.lastTraceAt) }} {{ row.lastTraceDesc }}</div>
+              <div v-if="(row.trace || []).length" class="trace-toggle" @click="toggleTrace(row.id)">
+                {{ expanded[row.id] ? '收起轨迹' : `展开轨迹(${row.trace.length})` }}
+              </div>
+              <div v-if="expanded[row.id]" class="trace-list">
+                <div v-for="(t, ti) in row.trace" :key="ti" class="trace-line">
+                  <span class="trace-time">{{ fmtTime(t.acceptTime) }}</span>
+                  <span class="trace-remark">{{ t.remark }}</span>
+                </div>
+              </div>
+            </td>
             <td>
-              <div v-for="(g, i) in (row.items || []).slice(0, 2)" :key="i" class="goods-line">
-                <span class="goods-name">{{ g.goodsName || g.title || '商品' }}</span>
-                <span class="goods-qty">×{{ g.number || g.num || g.quantity || 1 }}</span>
+              <div v-for="(g, i) in (row.items || []).slice(0, 2)" :key="i" class="goods-cell">
+                <img v-if="g.thumbUrl || g.picUrl" :src="g.thumbUrl || g.picUrl" class="goods-img" referrerpolicy="no-referrer" loading="lazy" alt="" />
+                <div v-else class="goods-img goods-img-empty"></div>
+                <div class="goods-info">
+                  <span class="goods-name">{{ g.goodsName || g.title || '商品' }}</span>
+                  <span class="goods-sub">¥{{ g.price ?? '—' }} × {{ g.number || g.num || g.quantity || 1 }}</span>
+                </div>
               </div>
               <div v-if="(row.items || []).length > 2" class="muted">等 {{ row.items.length }} 件商品</div>
             </td>
@@ -130,7 +147,14 @@
           <tbody>
             <tr v-for="o in currentPostings" :key="o.orderSn">
               <td class="sel-col"><input type="checkbox" v-model="curStore.selected[o.orderSn]" @change="syncCreateSelectedCount" /></td>
-              <td class="mono">{{ o.orderSn }}</td>
+              <td class="mono">
+                {{ o.orderSn }}
+                <span
+                  v-if="linkedCount(currentTabDef?.platform, o.orderSn)"
+                  class="linked-tag"
+                  :title="`该平台订单已在现有采购中关联了 ${linkedCount(currentTabDef?.platform, o.orderSn)} 个 Ozon 包裹`"
+                >已关联包裹</span>
+              </td>
               <td>
                 <div v-for="(g, gi) in (o.goods || []).slice(0, 3)" :key="gi" class="goods-cell">
                   <img v-if="g.thumbUrl || g.picUrl" :src="g.thumbUrl || g.picUrl" class="goods-img" referrerpolicy="no-referrer" loading="lazy" alt="" />
@@ -195,7 +219,7 @@ import { ref, reactive, computed, nextTick, onMounted } from 'vue';
 import AppModal from '../components/AppModal.vue';
 import AppPager from '../components/AppPager.vue';
 import { useToast } from '../components/useToast.js';
-import { listPrePurchases, createPrePurchase, deletePrePurchase, receivePrePurchase, receiveByCode } from '../api/pre-purchase.js';
+import { listPrePurchases, createPrePurchase, deletePrePurchase, receivePrePurchase, receiveByCode, checkLinked, syncTrace } from '../api/pre-purchase.js';
 import { getPlatformOrders, searchPlatformOrder, getPlatformOrdersStatus } from '../api/order-process.js';
 
 const { show } = useToast();
@@ -249,6 +273,26 @@ async function receiveOne(row) {
     loadList();
   } catch (e) { show(e.message || String(e), 'error'); }
 }
+
+// 物流轨迹展开/收起
+const expanded = reactive({});
+function toggleTrace(id) { expanded[id] = !expanded[id]; }
+
+// 手动同步物流轨迹
+const syncing = ref(false);
+async function doSyncTrace() {
+  syncing.value = true;
+  try {
+    await syncTrace();
+    show('已触发物流轨迹同步,稍后自动刷新', 'success');
+    setTimeout(loadList, 15000);
+    setTimeout(loadList, 60000);
+  } catch (e) {
+    show(e.message || String(e), 'error');
+  } finally {
+    syncing.value = false;
+  }
+}
 async function removeRow(row) {
   if (!confirm(`确认删除预采购单 ${row.purchaseSn || row.id}？`)) return;
   try {
@@ -298,6 +342,20 @@ function rebuildAccountTabs(platforms) {
 function loginState(t) { return platformLogin[`${t.platform}:${t.account}`] || 'unknown'; }
 
 const createStores = reactive({});
+// 已关联 Ozon 包裹的平台订单标记:key="platform:orderSn" → 关联包裹数
+const linkedMap = reactive({});
+async function markLinked(platform, orders) {
+  if (!platform || !orders?.length) return;
+  try {
+    const r = await checkLinked(orders.map((o) => ({ platform, purchaseSn: o.orderSn })));
+    const linked = r?.linked || r?.data?.linked || {};
+    Object.assign(linkedMap, linked);
+  } catch { /* 忽略:标记失败不影响选单 */ }
+}
+function linkedCount(platform, sn) {
+  if (!platform || !sn) return 0;
+  return linkedMap[`${platform}:${sn}`] || 0;
+}
 function storeFor(key) {
   if (!createStores[key]) {
     createStores[key] = { orders: [], searched: [], loading: false, error: '', selected: {}, logistics: {}, allSelected: false };
@@ -365,6 +423,7 @@ async function loadOrders() {
     st.orders = (r?.orders || []).map(normalizeOrder);
     st.searched = [];
     if (!st.orders.length) st.error = '该平台/账号暂无可选订单';
+    markLinked(def.platform, st.orders);
   } catch (e) {
     st.error = e.message || String(e);
     st.orders = [];
@@ -402,6 +461,7 @@ async function doSearchOrder() {
       st.searched = [normalizeOrder(result)];
       st.selected[result.orderSn || sn] = true;
       syncCreateSelectedCount();
+      markLinked(def.platform, st.searched);
     } else {
       createSearch.error = `未找到订单 ${sn}（单号不存在，或不属于当前账号 ${def.account || '主账号'}）`;
     }
@@ -525,6 +585,14 @@ onMounted(loadList);
 .tab-btn.active { background: #165dff; color: #fff; border-color: #165dff; }
 .tab-count { margin-left: 4px; opacity: 0.85; }
 .login-bad { color: #f53f3f; font-size: 11px; margin-left: 4px; }
+.linked-tag { display: inline-block; margin-left: 6px; color: #d97706; background: #fff7e6; border-radius: 4px; padding: 0 6px; font-size: 11px; white-space: nowrap; }
+.logi-cell { max-width: 240px; }
+.trace-latest { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+.trace-toggle { color: #165dff; font-size: 12px; cursor: pointer; margin-top: 2px; }
+.trace-list { margin-top: 4px; border-top: 1px dashed #e5e6eb; padding-top: 4px; max-height: 180px; overflow-y: auto; }
+.trace-line { font-size: 11px; color: #4e5969; display: flex; gap: 6px; padding: 2px 0; }
+.trace-time { color: #86909c; flex-shrink: 0; }
+.trace-remark { flex: 1; word-break: break-all; }
 .card { background: #fff; border-radius: 8px; padding: 12px; }
 .list-empty { text-align: center; color: #a6abb3; padding: 30px 0; }
 .pre-table { width: 100%; border-collapse: collapse; font-size: 13px; }

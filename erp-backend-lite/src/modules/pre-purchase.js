@@ -14,6 +14,11 @@ import { db } from '../db/index.js';
 import { ok } from '../utils/response.js';
 import { ApiError, ErrorCode } from '../utils/error-codes.js';
 import { imageCacheUrlFor } from '../services/order-image-cache.js';
+import logger from '../middleware/log.js';
+import { getTraceForOrder, hasAliOpenApiToken } from '../services/platform-orders/adapters/ali1688-openapi.js';
+import { getPddTrace } from '../services/platform-orders/adapters/pdd.js';
+import { getTaobaoTrace } from '../services/platform-orders/adapters/taobao.js';
+import { getXianyuTrace } from '../services/platform-orders/adapters/xianyu.js';
 
 const router = Router();
 
@@ -39,6 +44,8 @@ function rowToItem(r) {
   try { platformGoods = JSON.parse(r.platform_goods_json) || []; } catch { platformGoods = []; }
   const goods = mapGoods(items.length ? items : platformGoods);
   const totalQty = goods.reduce((s, g) => s + (Number(g.number || g.num || g.quantity) || 0), 0);
+  let trace = [];
+  try { trace = r.trace_json ? JSON.parse(r.trace_json) : []; } catch { trace = []; }
   return {
     id: r.id,
     platform: r.platform,
@@ -60,6 +67,9 @@ function rowToItem(r) {
     updatedAt: r.updated_at,
     items: goods,
     totalQty,
+    trace,
+    lastTraceAt: r.last_trace_at || null,
+    lastTraceDesc: r.last_trace_desc || null,
   };
 }
 
@@ -102,6 +112,40 @@ router.get('/admin/api/pre-purchase/list', (req, res, next) => {
       pageSize,
       counts: { all, pending: all - received, received },
     }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// 平台订单 platform(接口值) → op_purchase_order.platform(存储值)
+const PURCHASE_PLATFORM = {
+  pdd: 'yangkeduo', yangkeduo: 'yangkeduo',
+  ali1688: '1688', '1688': '1688',
+  taobao: 'taobao', xianyu: 'xianyu', other: 'other',
+};
+
+// ── 批量检查平台订单是否已关联 Ozon 包裹(2026-11-16)──
+// body: { items: [{ platform, purchaseSn }] } → { linked: { "platform:sn": packageCount } }
+// 用于新增预采购时标记"该平台订单已在现有采购中关联了 Ozon 包裹"。
+router.post('/admin/api/pre-purchase/check-linked', (req, res, next) => {
+  try {
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    const linked = {};
+    const stmt = db.prepare(
+      `SELECT COUNT(DISTINCT pl.package_id) AS n
+       FROM op_purchase_order po
+       JOIN op_purchase_link pl ON pl.purchase_order_id = po.id
+       WHERE po.platform = ? AND po.purchase_sn = ? AND pl.package_id IS NOT NULL`
+    );
+    for (const it of items) {
+      const rawPlatform = String(it?.platform || '').toLowerCase();
+      const plat = PURCHASE_PLATFORM[rawPlatform] || it?.platform;
+      const sn = String(it?.purchaseSn || '').trim();
+      if (!plat || !sn) continue;
+      const n = Number(stmt.get(String(plat), sn)?.n) || 0;
+      if (n > 0) linked[`${it.platform}:${sn}`] = n;
+    }
+    res.json(ok({ linked }));
   } catch (e) {
     next(e);
   }
@@ -229,5 +273,100 @@ router.post('/admin/api/pre-purchase/receive-by-code', (req, res, next) => {
     next(e);
   }
 });
+
+// ── 物流轨迹定时同步(2026-11-16):每小时拉取待收货预采购的快递轨迹 ──
+const TRACE_SYNC_INTERVAL_MS = 60 * 60 * 1000;
+const TRACE_PER_ROUND = 200;
+const TRACE_REQUEST_INTERVAL_MS = 1500;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let traceSyncing = false;
+let traceLastRun = null;
+let traceLastResult = null;
+
+async function fetchTraceForRow(row) {
+  const platform = String(row.platform || '');
+  const sn = row.purchase_sn;
+  const account = row.buyer_account || '';
+  if (!sn) return null;
+  try {
+    if (platform === 'yangkeduo' || platform === 'pdd') {
+      const r = await getPddTrace(sn, row.logistics_no, account);
+      return { steps: r?.steps || [], shippingName: r?.shippingName, trackingNumber: r?.trackingNumber };
+    }
+    if (platform === '1688' || platform === 'ali1688') {
+      if (!hasAliOpenApiToken(account)) return null;
+      const r = await getTraceForOrder(sn, account);
+      return { steps: r?.steps || [] };
+    }
+    if (platform === 'taobao') {
+      const r = await getTaobaoTrace(sn, account);
+      return { steps: r?.steps || [], shippingName: r?.shippingName, trackingNumber: r?.expressId };
+    }
+    if (platform === 'xianyu') {
+      const r = await getXianyuTrace(sn, account);
+      return { steps: r?.steps || [], shippingName: r?.shippingName, trackingNumber: r?.trackingNumber };
+    }
+  } catch (e) {
+    logger.warn({ purchaseSn: sn, platform, err: e?.message }, '[pre-purchase] 轨迹查询失败');
+  }
+  return null;
+}
+
+async function runPrePurchaseTraceSync() {
+  if (traceSyncing) return { running: true };
+  traceSyncing = true;
+  const startedAt = nowIso();
+  let scanned = 0, updated = 0, failed = 0;
+  try {
+    const rows = db
+      .prepare(
+        `SELECT id, platform, purchase_sn, buyer_account, logistics_no FROM op_pre_purchase
+         WHERE receive_status = 'pending' AND purchase_sn IS NOT NULL AND length(purchase_sn) > 0
+         ORDER BY id DESC LIMIT ?`
+      )
+      .all(TRACE_PER_ROUND);
+    scanned = rows.length;
+    for (const r of rows) {
+      const t = await fetchTraceForRow(r);
+      if (t && Array.isArray(t.steps) && t.steps.length) {
+        const latest = t.steps[0] || {};
+        const now = nowIso();
+        const sets = ['trace_json = ?', 'last_trace_at = ?', 'last_trace_desc = ?', 'updated_at = ?'];
+        const args = [JSON.stringify(t.steps), latest.acceptTime || null, String(latest.remark || '').slice(0, 500), now];
+        // 物流单号仅在库中为空时回填(保留用户手填签收匹配键)
+        if (!r.logistics_no && t.trackingNumber) { sets.push('logistics_no = ?'); args.push(String(t.trackingNumber)); }
+        if (t.shippingName) { sets.push("logistics_company = COALESCE(NULLIF(logistics_company, ''), ?)"); args.push(String(t.shippingName)); }
+        args.push(r.id);
+        db.prepare(`UPDATE op_pre_purchase SET ${sets.join(', ')} WHERE id = ?`).run(...args);
+        updated++;
+      } else {
+        failed++;
+      }
+      await sleep(TRACE_REQUEST_INTERVAL_MS);
+    }
+  } catch (e) {
+    logger.warn({ err: e?.message }, '[pre-purchase] 轨迹同步异常');
+  } finally {
+    traceSyncing = false;
+    traceLastRun = startedAt;
+    traceLastResult = { scanned, updated, failed, finishedAt: nowIso() };
+  }
+  return traceLastResult;
+}
+
+// 手动触发轨迹同步(前端"同步物流轨迹"按钮)
+router.post('/admin/api/pre-purchase/sync-trace', (_req, res) => {
+  runPrePurchaseTraceSync().catch(() => {});
+  res.json(ok({ started: true }));
+});
+
+// 轨迹同步状态(前端轮询)
+router.get('/admin/api/pre-purchase/sync-trace-status', (_req, res) => {
+  res.json(ok({ running: traceSyncing, lastRun: traceLastRun, lastResult: traceLastResult }));
+});
+
+// 定时:每小时一次,首轮延迟 90s 避开启动高峰
+setTimeout(() => { runPrePurchaseTraceSync().catch(() => {}); }, 90 * 1000);
+setInterval(() => { runPrePurchaseTraceSync().catch(() => {}); }, TRACE_SYNC_INTERVAL_MS);
 
 export default router;
