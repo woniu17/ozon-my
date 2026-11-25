@@ -6,15 +6,18 @@ import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
+import coil.load
 import com.yochylin.scanner.api.Api
 import com.yochylin.scanner.api.optDouble
 import com.yochylin.scanner.api.optInt
@@ -46,6 +49,7 @@ class PrePurchaseFragment : Fragment() {
         val purchaseSn: String,
         val logisticsCompany: String,
         val logisticsNo: String,
+        val picUrl: String,
         val paymentAmount: Double,
         val receiveStatus: String,
         val receivedAt: String,
@@ -126,9 +130,14 @@ class PrePurchaseFragment : Fragment() {
                         val o = el.asJsonObject
                         val goods = o.getAsJsonArray("items")
                         val summary = StringBuilder()
+                        var picUrl = ""
                         if (goods != null) {
                             for (g in goods) {
                                 val go = g.asJsonObject
+                                if (picUrl.isBlank()) {
+                                    val u = go.optString("thumbUrl").ifBlank { go.optString("picUrl") }
+                                    if (u.isNotBlank()) picUrl = u
+                                }
                                 val name = go.optString("goodsName").ifBlank { go.optString("title") }
                                 val num = go.optDouble("number", go.optDouble("num", 1.0))
                                 if (name.isNotBlank()) {
@@ -150,6 +159,7 @@ class PrePurchaseFragment : Fragment() {
                                 purchaseSn = o.optString("purchaseSn"),
                                 logisticsCompany = o.optString("logisticsCompany"),
                                 logisticsNo = o.optString("logisticsNo"),
+                                picUrl = picUrl,
                                 paymentAmount = o.optDouble("paymentAmount"),
                                 receiveStatus = o.optString("receiveStatus"),
                                 receivedAt = o.optString("receivedAt"),
@@ -234,15 +244,31 @@ class PrePurchaseFragment : Fragment() {
         })
         card.addView(head)
 
-        if (row.itemSummary.isNotBlank()) {
-            card.addView(TextView(ctx).apply {
+        if (row.itemSummary.isNotBlank() || row.picUrl.isNotBlank()) {
+            val goodsRow = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(6), 0, 0)
+            }
+            val img = ImageView(ctx).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                setBackgroundColor(Color.parseColor("#f2f3f5"))
+            }
+            if (row.picUrl.isNotBlank()) {
+                img.load(if (row.picUrl.startsWith("/")) Api.BASE_URL + row.picUrl else row.picUrl)
+            }
+            goodsRow.addView(img)
+            goodsRow.addView(TextView(ctx).apply {
                 text = row.itemSummary
                 setTextColor(Color.parseColor("#4e5969"))
                 textSize = 12f
                 maxLines = 2
                 ellipsize = android.text.TextUtils.TruncateAt.END
-                setPadding(0, dp(4), 0, 0)
+                setPadding(dp(8), 0, 0, 0)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             })
+            card.addView(goodsRow)
         }
         val meta = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
