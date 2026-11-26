@@ -307,6 +307,29 @@ function splitAnalysisTitle(pkg) {
   }
   return lines.filter(Boolean).join('\n');
 }
+// 完整拆单建议结论(OGL 合计 = 运费 + 电子服务费)
+function splitPanelConclusion(pkg) {
+  const sa = pkg.splitAnalysis;
+  if (!sa?.splitEligible) return '';
+  if (splitSameGroup(sa)) {
+    const diff = (sa.best?.serviceFeeCny ?? 0) - (sa.whole?.serviceFeeCny ?? 0);
+    return diff > 0
+      ? `整件与拆单同属「${sa.whole.groupName}」等级,运费无差异;拆包需多付电子服务费 ${fmtMoney(diff)},建议不拆单。`
+      : `整件与拆单同属「${sa.whole.groupName}」等级,运费无差异,建议不拆单。`;
+  }
+  if (isSplitSaving(sa)) return `按 OGL 合计(运费+电子服务费)比较,拆包可省 ${fmtMoney(sa.saveCny)},建议拆包。`;
+  return `按 OGL 合计(运费+电子服务费)比较,拆包反而贵 ${fmtMoney(Math.abs(sa.saveCny || 0))},建议整件发出。`;
+}
+// 不可拆原因(整件费用已在上方展示)
+function splitPanelReason(pkg) {
+  const sa = pkg.splitAnalysis;
+  const map = {
+    multi_sku: '多 SKU 订单,暂不分析拆包;以上为整件 OGL 费用。',
+    too_many_units: '件数过多,暂不分析拆包;以上为整件 OGL 费用。',
+    no_unit_price: '缺少单件申报价值,无法枚举拆包;以上为整件 OGL 费用。',
+  };
+  return map[sa?.reason] || '暂无法拆包;以上为整件 OGL 费用。';
+}
 function fmtTime(t) {
   if (!t) return '—';
   const d = new Date(t);
@@ -1284,15 +1307,61 @@ function onPrinterChange() {
             </div>
             <div class="profit-row mono formula">{{ profitCalc(pkg).main }}</div>
             <div v-if="profitCalc(pkg).rates" class="profit-row mono formula sub">{{ profitCalc(pkg).rates }}</div>
-            <!-- OGL 运费/拆包提示(2026-11-13,对齐订单处理页):拆包省/贵/不可拆 -->
+            <!-- OGL 运费/拆包完整分析(2026-11-26):整件/拆包全量公式 + 运费/电子服务费/OGL合计 + 结论 -->
             <div
               v-if="pkg.splitAnalysis?.applicable"
-              class="profit-row split-save-row"
+              class="split-panel"
               :class="splitAnalysisCls(pkg)"
-              :title="splitAnalysisTitle(pkg)"
             >
-              <span class="split-save-name">{{ splitAnalysisLabel(pkg) }}</span>
-              <span class="split-save-val">{{ splitAnalysisText(pkg) }}</span>
+              <div class="split-panel-head">
+                <span class="split-save-name">拆单建议</span>
+                <span class="split-panel-badge">{{ splitAnalysisLabel(pkg) }}</span>
+                <span class="split-save-val">{{ splitAnalysisText(pkg) }}</span>
+                <span v-if="pkg.splitAnalysis.splitEligible" class="split-panel-status">
+                  {{ pkg.splitAnalysis.operable ? '可拆包' : '已发货/交运' }}
+                </span>
+              </div>
+              <div class="split-panel-body">
+                <div class="split-panel-col">
+                  <div class="split-panel-title">
+                    整件(不拆) · {{ pkg.splitAnalysis.whole.groupName }}档 ·
+                    申报 {{ fmtMoney(pkg.splitAnalysis.whole.valueCny) }} · {{ pkg.splitAnalysis.whole.weightG }}g
+                  </div>
+                  <div class="mono split-panel-line">{{ pkg.splitAnalysis.whole.formula }}</div>
+                  <div v-if="pkg.splitAnalysis.whole.serviceFeeFormula" class="mono split-panel-line sub">
+                    {{ pkg.splitAnalysis.whole.serviceFeeFormula }}
+                  </div>
+                  <div v-if="pkg.splitAnalysis.whole.totalFormula" class="mono split-panel-line split-panel-total">
+                    {{ pkg.splitAnalysis.whole.totalFormula }}
+                  </div>
+                </div>
+                <template v-if="pkg.splitAnalysis.splitEligible && pkg.splitAnalysis.best">
+                  <div class="split-panel-arrow">→</div>
+                  <div class="split-panel-col best">
+                    <div class="split-panel-title">最优拆 {{ pkg.splitAnalysis.packagesCount }} 包</div>
+                    <div v-for="(sp, si) in pkg.splitAnalysis.best.packages" :key="si" class="split-pkg-line">
+                      <div class="split-pkg-head">
+                        包{{ si + 1 }} · {{ sp.units }}件({{ sp.weightG }}g, {{ fmtMoney(sp.valueCny) }}) · {{ sp.groupName }}档
+                      </div>
+                      <div class="mono split-panel-line">{{ sp.formula }}</div>
+                      <div v-if="sp.serviceFeeCny != null" class="mono split-panel-line sub">
+                        电子服务费 {{ fmtMoney(sp.serviceFeeCny) }} · 合计 {{ fmtMoney(sp.totalCny) }}
+                      </div>
+                    </div>
+                    <div class="mono split-panel-line split-panel-total">
+                      运费合计 {{ fmtMoney(pkg.splitAnalysis.best.totalCny) }}
+                      <template v-if="pkg.splitAnalysis.serviceFeeCny != null">
+                        · 电子服务费 {{ fmtMoney(pkg.splitAnalysis.serviceFeeCny) }} ·
+                        OGL合计 {{ fmtMoney(pkg.splitAnalysis.totalCostCny) }}
+                      </template>
+                    </div>
+                    <div class="split-panel-conclusion">{{ splitPanelConclusion(pkg) }}</div>
+                  </div>
+                </template>
+              </div>
+              <div v-if="!pkg.splitAnalysis.splitEligible" class="split-panel-reason">
+                {{ splitPanelReason(pkg) }}
+              </div>
             </div>
           </div>
 
@@ -1811,6 +1880,79 @@ function onPrinterChange() {
 .split-save-info .split-save-val {
   font-weight: 600;
 }
+/* 完整拆单建议面板(2026-11-26):整件 vs 最优拆包,含运费/电子服务费/OGL合计 */
+.split-panel {
+  margin-top: 2px;
+  padding: 8px 10px;
+  border: 1px solid #e5e6eb;
+  border-radius: 8px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.split-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.split-panel-badge {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #eef4ff;
+  color: #165dff;
+}
+.split-save-save .split-panel-badge { background: #e8ffea; color: #16a34a; }
+.split-save-worse .split-panel-badge { background: #fff7e6; color: #d97706; }
+.split-save-info .split-panel-badge { background: #f2f3f5; color: #6b7280; }
+.split-panel-status {
+  margin-left: auto;
+  font-size: 11px;
+  color: #86909c;
+}
+.split-panel-body {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+  flex-wrap: wrap;
+}
+.split-panel-col {
+  flex: 1 1 320px;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #f7f8fa;
+}
+.split-panel-col.best { background: #f0fdf4; }
+.split-panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #1f2329;
+  margin-bottom: 2px;
+}
+.split-panel-line {
+  font-size: 11px;
+  color: #4e5969;
+  word-break: break-all;
+  line-height: 1.5;
+}
+.split-panel-line.sub { color: #86909c; }
+.split-panel-total { color: #1f2329; font-weight: 600; margin-top: 2px; }
+.split-pkg-line + .split-pkg-line { margin-top: 6px; }
+.split-pkg-head { font-size: 11px; color: #4e5969; }
+.split-panel-arrow { align-self: center; color: #86909c; }
+.split-panel-conclusion {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #16a34a;
+}
+.split-save-worse .split-panel-conclusion { color: #d97706; }
+.split-save-info .split-panel-conclusion { color: #6b7280; }
+.split-panel-reason { font-size: 11px; color: #86909c; }
 .profit-head {
   display: flex;
   align-items: center;
