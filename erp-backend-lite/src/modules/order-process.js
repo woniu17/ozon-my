@@ -296,6 +296,7 @@ function enrichListData(data) {
       unitQuantity: pkg.items.length === 1 ? pkg.items[0].quantity : undefined,
       unitPriceCny: pkg.items.length === 1 ? Number(pkg.items[0].price) : undefined,
       operateStatus: pkg.operateStatus,
+      rubCnyRate: rateInfo?.rate,
     });
   }
   data.rubRate = rateInfo;
@@ -734,6 +735,7 @@ router.get('/admin/api/order-process/detail/:id', (req, res, next) => {
       unitQuantity: dItems.length === 1 ? dItems[0].quantity : undefined,
       unitPriceCny: dItems.length === 1 ? Number(dItems[0].price) : undefined,
       operateStatus: detail.package.operateStatus,
+      rubCnyRate: rate,
     });
     res.json(ok(detail));
   } catch (e) {

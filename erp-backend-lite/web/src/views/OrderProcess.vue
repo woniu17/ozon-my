@@ -3001,7 +3001,7 @@ function splitAnalysisCls(pkg) {
 function splitAnalysisLabel(pkg) {
   const sa = pkg.splitAnalysis;
   if (!sa) return '';
-  if (!sa.splitEligible) return '整件运费';
+  if (!sa.splitEligible) return '整件OGL';
   if (splitSameGroup(sa)) return '不拆单';
   if (isSplitSaving(sa)) return sa.operable ? '💡拆包省钱' : '拆包省钱';
   return '整件更省';
@@ -3009,23 +3009,29 @@ function splitAnalysisLabel(pkg) {
 function splitAnalysisText(pkg) {
   const sa = pkg.splitAnalysis;
   if (!sa) return '';
-  if (!sa.splitEligible) return fmtMoney(sa.whole?.deliveryCny);
+  if (!sa.splitEligible) return fmtMoney(sa.whole?.totalCny ?? sa.whole?.deliveryCny);
   if (splitSameGroup(sa)) return '整件与拆单同属一等级';
   if (isSplitSaving(sa)) return `拆${sa.packagesCount}包省 ${fmtMoney(sa.saveCny)}`;
   return `拆${sa.packagesCount}包贵 ${fmtMoney(Math.abs(sa.saveCny || 0))}`;
 }
-// OGL 运费悬浮:整件/拆包完整公式 + 结论 + 是否仍可操作
+// OGL 费用悬浮:整件/拆包完整公式(运费+电子服务费) + 结论 + 是否仍可操作
 function splitAnalysisTitle(pkg) {
   const sa = pkg.splitAnalysis;
   if (!sa?.applicable) return '';
-  // 2026-11-13:同等级时简洁提示
+  // 2026-11-13:同等级时简洁提示;2026-11-26 补电子服务费差异(按货件收取)
   if (splitSameGroup(sa)) {
-    return `整件与拆单同属「${sa.whole.groupName}」等级,运费无差异,建议不拆单。`;
+    const diff = (sa.best?.serviceFeeCny ?? 0) - (sa.whole?.serviceFeeCny ?? 0);
+    const feeNote = diff > 0 ? `;拆包需多付电子服务费 ${fmtMoney(diff)}(${sa.packagesCount}份 vs 1份)` : '';
+    return `整件与拆单同属「${sa.whole.groupName}」等级,运费无差异${feeNote},建议不拆单。`;
   }
   const lines = [];
   lines.push(`不拆(整件 ${sa.whole.groupName}): ${sa.whole.formula}`);
+  if (sa.whole.serviceFeeFormula) lines.push(`　${sa.whole.serviceFeeFormula}`);
+  if (sa.whole.totalFormula) lines.push(`　${sa.whole.totalFormula}`);
   if (sa.splitEligible) {
     lines.push(`拆 ${sa.packagesCount} 包: ${sa.formula}`);
+    if (sa.serviceFeeFormula) lines.push(`　${sa.serviceFeeFormula}`);
+    if (sa.totalFormula) lines.push(`　${sa.totalFormula}`);
     lines.push(isSplitSaving(sa)
       ? `可省 ${fmtMoney(sa.saveCny)},建议拆包`
       : `拆包反而贵 ${fmtMoney(Math.abs(sa.saveCny || 0))},建议整件发出`);
@@ -3052,11 +3058,11 @@ function splitDetailStatusCls(pkg) {
   if (!sa.splitEligible) return 'tag-mute';
   return sa.operable ? 'tag-info' : 'tag-mute';
 }
-// 详情卡片结论标签(省/贵/整件运费)
+// 详情卡片结论标签(省/贵/整件OGL)
 function splitDetailConclusionLabel(pkg) {
   const sa = pkg.splitAnalysis;
   if (!sa) return '';
-  if (!sa.splitEligible) return `整件运费 ${fmtMoney(sa.whole?.deliveryCny)}`;
+  if (!sa.splitEligible) return `整件OGL ${fmtMoney(sa.whole?.totalCny ?? sa.whole?.deliveryCny)}`;
   return isSplitSaving(sa)
     ? `拆${sa.packagesCount}包可省 ${fmtMoney(sa.saveCny)}`
     : `拆${sa.packagesCount}包贵 ${fmtMoney(Math.abs(sa.saveCny || 0))},不拆比较好`;
@@ -4911,6 +4917,8 @@ onUnmounted(() => {
                 <div class="split-col-title">整件(不拆)</div>
                 <div class="split-col-group">{{ detail.package.splitAnalysis.whole.groupName }} 档 · {{ detail.package.splitAnalysis.whole.weightG }}g · 申报 ¥{{ detail.package.splitAnalysis.whole.valueCny }}</div>
                 <div class="mono">{{ detail.package.splitAnalysis.whole.formula }}</div>
+                <div v-if="detail.package.splitAnalysis.whole.serviceFeeFormula" class="mono">{{ detail.package.splitAnalysis.whole.serviceFeeFormula }}</div>
+                <div v-if="detail.package.splitAnalysis.whole.totalFormula" class="mono">{{ detail.package.splitAnalysis.whole.totalFormula }}</div>
               </div>
               <template v-if="detail.package.splitAnalysis.splitEligible">
                 <div class="split-arrow">→</div>
@@ -4922,9 +4930,11 @@ onUnmounted(() => {
                     class="split-pkg-line"
                   >
                     <span class="split-pkg-name">包{{ i + 1 }}·{{ p.units }}件({{ p.weightG }}g, ¥{{ p.valueCny }})</span>
-                    <span class="mono split-pkg-formula">{{ p.groupName }}档 · {{ p.formula }}</span>
+                    <span class="mono split-pkg-formula">{{ p.groupName }}档 · {{ p.formula }}<template v-if="p.serviceFeeCny != null"> · 电子服务费 ¥{{ Number(p.serviceFeeCny).toFixed(2) }} · 合计 ¥{{ Number(p.totalCny).toFixed(2) }}</template></span>
                   </div>
                   <div class="split-pkg-total mono">合计: {{ detail.package.splitAnalysis.formula }}</div>
+                  <div v-if="detail.package.splitAnalysis.serviceFeeFormula" class="split-pkg-total mono">{{ detail.package.splitAnalysis.serviceFeeFormula }}</div>
+                  <div v-if="detail.package.splitAnalysis.totalFormula" class="split-pkg-total mono">{{ detail.package.splitAnalysis.totalFormula }}</div>
                 </div>
               </template>
             </div>

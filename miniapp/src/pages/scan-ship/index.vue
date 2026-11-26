@@ -1031,7 +1031,7 @@ function splitCls(pkg) {
 function splitText(pkg) {
   const sa = pkg.splitAnalysis;
   if (!sa) return '';
-  if (!sa.splitEligible) return `整件运费 ${fmtMoney(sa.whole?.deliveryCny)}`;
+  if (!sa.splitEligible) return `整件OGL ${fmtMoney(sa.whole?.totalCny ?? sa.whole?.deliveryCny)}`;
   if (splitSameGroup(sa)) return '不拆单,整件与拆单同属一等级';
   if (isSplitSaving(sa)) return `拆${sa.packagesCount}包省 ${fmtMoney(sa.saveCny)}`;
   return `整件更省 · 拆${sa.packagesCount}包贵 ${fmtMoney(Math.abs(sa.saveCny || 0))}`;

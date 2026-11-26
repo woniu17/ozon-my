@@ -734,6 +734,18 @@ class OrderDetailActivity : ComponentActivity() {
                 setTypeface(null, android.graphics.Typeface.BOLD)
                 setPadding(dp(2), dp(4), dp(2), dp(4))
             })
+            // 2026-11-26:电子服务费按货件收取,同等级拆包仍会多付 (N-1) 份服务费
+            val wholeFee = sa.whole?.serviceFeeCny
+            val splitFee = sa.best?.serviceFeeCny
+            if (wholeFee != null && splitFee != null && splitFee > wholeFee) {
+                dSplitAnalysisCard.addView(TextView(this).apply {
+                    text = "拆${sa.packagesCount ?: 0}包运费相同,但需多付电子服务费 ${fmtMoney(splitFee - wholeFee)}" +
+                        "(${sa.packagesCount ?: 0}份 vs 1份)"
+                    setTextColor(Color.parseColor("#4e5969"))
+                    textSize = 11f
+                    setPadding(dp(2), 0, dp(2), dp(4))
+                })
+            }
             return
         }
 
@@ -745,7 +757,7 @@ class OrderDetailActivity : ComponentActivity() {
         }
         val title = TextView(this).apply {
             text = when {
-                !sa.splitEligible -> "整件运费 ${fmtMoney(sa.whole?.deliveryCny)}"
+                !sa.splitEligible -> "整件OGL ${fmtMoney(sa.whole?.totalCny ?: sa.whole?.deliveryCny)}"
                 saving -> "拆${sa.packagesCount ?: 0}包可省 ${fmtMoney(sa.saveCny)}"
                 else -> "拆${sa.packagesCount ?: 0}包贵 ${fmtMoney(Math.abs(sa.saveCny ?: 0.0))},不拆比较好"
             }
@@ -774,19 +786,36 @@ class OrderDetailActivity : ComponentActivity() {
         head.addView(status)
         dSplitAnalysisCard.addView(head)
 
+        // 2026-11-26:OGL 费用 = 运费 + 电子服务费,公式里补服务费/合计行
+        fun costLines(freightFormula: String?, fee: Double?, total: Double?): String = buildString {
+            if (!freightFormula.isNullOrBlank()) append(freightFormula)
+            if (fee != null) {
+                if (isNotEmpty()) append("\n")
+                append("电子服务费 ").append(fmtMoney(fee)).append(" · OGL合计 ").append(fmtMoney(total))
+            }
+        }
         dSplitAnalysisCard.addView(
-            splitBlock("不拆(整件) · ${sa.whole?.groupName ?: ""}档", sa.whole?.formula ?: "", green = false)
+            splitBlock(
+                "不拆(整件) · ${sa.whole?.groupName ?: ""}档",
+                costLines(sa.whole?.formula, sa.whole?.serviceFeeCny, sa.whole?.totalCny),
+                green = false
+            )
         )
         for ((i, sp) in (sa.best?.packages.orEmpty()).withIndex()) {
             dSplitAnalysisCard.addView(
                 splitBlock(
                     "包${i + 1} · ${sp.units}件(${sp.weightG}g, ${fmtMoney(sp.valueCny)}) · ${sp.groupName ?: ""}档",
-                    sp.formula ?: "",
+                    costLines(sp.formula, sp.serviceFeeCny, sp.totalCny),
                     green = true
                 )
             )
         }
-        dSplitAnalysisCard.addView(splitBlock("合计", sa.formula ?: "", green = true, bold = true))
+        val totalText = buildString {
+            append(sa.formula ?: "")
+            if (!sa.serviceFeeFormula.isNullOrBlank()) append("\n").append(sa.serviceFeeFormula)
+            if (!sa.totalFormula.isNullOrBlank()) append("\n").append(sa.totalFormula)
+        }
+        dSplitAnalysisCard.addView(splitBlock("合计", totalText, green = true, bold = true))
     }
 
     private fun splitBlock(title: String, formula: String, green: Boolean, bold: Boolean = false): LinearLayout {

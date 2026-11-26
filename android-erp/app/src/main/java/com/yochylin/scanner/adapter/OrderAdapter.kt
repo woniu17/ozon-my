@@ -227,7 +227,7 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
                 oSplitSave.visibility = View.VISIBLE
                 oSplitSave.text = buildString {
                     when {
-                        !sa.splitEligible -> append("整件运费 ").append(fmtMoney(sa.whole?.deliveryCny))
+                        !sa.splitEligible -> append("整件OGL ").append(fmtMoney(sa.whole?.totalCny ?: sa.whole?.deliveryCny))
                         sameGroup -> append("不拆单,整件与拆单同属一等级")
                         saving -> append("拆").append(sa.packagesCount ?: 0).append("包省 ").append(fmtMoney(sa.saveCny))
                         else -> append("整件更省 · 拆").append(sa.packagesCount ?: 0).append("包贵 ")

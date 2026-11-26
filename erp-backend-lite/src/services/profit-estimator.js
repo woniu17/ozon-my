@@ -8,36 +8,30 @@
 //     - 其他(ABT/OYX 等 aggregator)→ 旧线性公式 3.37 + 0.0281 × weight_g(ABT Economy Extra Small)
 //   回款 escrow = 金额 − 佣金 − 配送;利润 = escrow − 采购
 // 教训(project memory):利润口径必须单点维护,禁止两处各自实现漂移
-import { estimateOglFreight, getOglGroup } from './ogl-freight.js';
+import {
+  estimateOglFreight,
+  getOglGroup,
+  estimateOglElectronicFeeCny,
+  OGL_ELECTRONIC_FEE_RATE,
+  OGL_ELECTRONIC_FEE_MIN_RUB,
+  OGL_ELECTRONIC_FEE_MAX_RUB,
+} from './ogl-freight.js';
+
+// 电子服务费的唯一实现已移到 ogl-freight.js(拆单分析也要用,避免循环依赖);
+// 这里继续导出,保持既有 import 方(order-process.js 等)不改。
+export {
+  estimateOglElectronicFeeCny,
+  OGL_ELECTRONIC_FEE_RATE,
+  OGL_ELECTRONIC_FEE_MIN_RUB,
+  OGL_ELECTRONIC_FEE_MAX_RUB,
+};
 
 export const DEFAULT_COMMISSION_RATE = 0.16;
 // ABT Economy Extra Small 线性公式(legacy,非 OGL 配送兜底)
 export const DELIVERY_BASE_CNY = 3.37;
 export const DELIVERY_PER_G_CNY = 0.0281;
 
-// OGL 电子服务费(2026-11-16):每件货件价值 2%,每件封底 15 卢布、封顶 200 卢布。
-// 订单金额为 CNY,按 rubCnyRate(1 RUB = rate CNY) 换算成卢布计费后再换回 CNY。
-export const OGL_ELECTRONIC_FEE_RATE = 0.02;
-export const OGL_ELECTRONIC_FEE_MIN_RUB = 15;
-export const OGL_ELECTRONIC_FEE_MAX_RUB = 200;
-
 const round2 = (n) => Math.round(n * 100) / 100;
-
-/**
- * OGL 电子服务费估算(CNY):max(15, min(200, 货件价值RUB × 2%)) × 汇率。
- * 货件价值由 CNY 换算成 RUB(÷ rubCnyRate);汇率缺失/非法返回 null。
- */
-export function estimateOglElectronicFeeCny({ valueCny, rubCnyRate }) {
-  const v = Number(valueCny);
-  const rate = Number(rubCnyRate);
-  if (!Number.isFinite(v) || v <= 0 || !Number.isFinite(rate) || rate <= 0) return null;
-  const valueRub = v / rate;
-  const feeRub = Math.max(
-    OGL_ELECTRONIC_FEE_MIN_RUB,
-    Math.min(OGL_ELECTRONIC_FEE_MAX_RUB, valueRub * OGL_ELECTRONIC_FEE_RATE)
-  );
-  return round2(feeRub * rate);
-}
 
 /** 是否 OGL 配送(Доставка Ozon курьеру / ozon_outsourced) */
 export function isOglDelivery(deliveryMethodName, tplIntegrationType) {

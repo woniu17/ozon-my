@@ -122,6 +122,11 @@ data class SplitAnalysis(
     val saveCny: Double? = null,
     val packagesCount: Int? = null,
     val formula: String? = null,
+    // 电子服务费(2026-11-26,OGL 费用一部分):拆包合计口径
+    val serviceFeeCny: Double? = null,    // 拆包电子服务费合计(每包一份)
+    val totalCostCny: Double? = null,     // 拆包 OGL 合计 = 运费 + 电子服务费
+    val serviceFeeFormula: String? = null,
+    val totalFormula: String? = null,
 )
 
 data class SplitWhole(
@@ -134,12 +139,19 @@ data class SplitWhole(
     val variableFee: Double? = null,
     val deliveryCny: Double? = null,
     val formula: String? = null,
+    // 电子服务费(2026-11-26):整件一份
+    val serviceFeeCny: Double? = null,
+    val totalCny: Double? = null,         // OGL 合计 = 运费 + 电子服务费
+    val serviceFeeFormula: String? = null,
+    val totalFormula: String? = null,
 )
 
 data class SplitBest(
     val packages: List<SplitPackage>? = null,
-    val totalCny: Double? = null,
+    val totalCny: Double? = null,         // 运费合计(不含服务费)
     val saveCny: Double? = null,
+    val serviceFeeCny: Double? = null,    // 电子服务费合计
+    val totalCostCny: Double? = null,     // OGL 合计 = 运费 + 电子服务费
 )
 
 data class SplitPackage(
@@ -153,6 +165,8 @@ data class SplitPackage(
     val variableFee: Double? = null,
     val deliveryCny: Double? = null,
     val formula: String? = null,
+    val serviceFeeCny: Double? = null,    // 本包电子服务费
+    val totalCny: Double? = null,         // 本包 OGL 合计
 )
 
 data class PkgItem(

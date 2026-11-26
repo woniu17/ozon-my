@@ -265,7 +265,7 @@ function splitAnalysisCls(pkg) {
 function splitAnalysisLabel(pkg) {
   const sa = pkg.splitAnalysis;
   if (!sa) return '';
-  if (!sa.splitEligible) return '整件运费';
+  if (!sa.splitEligible) return '整件OGL';
   if (splitSameGroup(sa)) return '不拆单';
   if (isSplitSaving(sa)) return sa.operable ? '💡拆包省钱' : '拆包省钱';
   return '整件更省';
@@ -273,23 +273,29 @@ function splitAnalysisLabel(pkg) {
 function splitAnalysisText(pkg) {
   const sa = pkg.splitAnalysis;
   if (!sa) return '';
-  if (!sa.splitEligible) return fmtMoney(sa.whole?.deliveryCny);
+  if (!sa.splitEligible) return fmtMoney(sa.whole?.totalCny ?? sa.whole?.deliveryCny);
   if (splitSameGroup(sa)) return '整件与拆单同属一等级';
   if (isSplitSaving(sa)) return `拆${sa.packagesCount}包省 ${fmtMoney(sa.saveCny)}`;
   return `拆${sa.packagesCount}包贵 ${fmtMoney(Math.abs(sa.saveCny || 0))}`;
 }
-// OGL 运费悬浮:整件/拆包完整公式 + 结论 + 是否仍可操作
+// OGL 费用悬浮:整件/拆包完整公式(运费+电子服务费) + 结论 + 是否仍可操作
 function splitAnalysisTitle(pkg) {
   const sa = pkg.splitAnalysis;
   if (!sa?.applicable) return '';
-  // 2026-11-13:同等级时简洁提示
+  // 2026-11-13:同等级时简洁提示;2026-11-26 补电子服务费差异(按货件收取)
   if (splitSameGroup(sa)) {
-    return `整件与拆单同属「${sa.whole.groupName}」等级,运费无差异,建议不拆单。`;
+    const diff = (sa.best?.serviceFeeCny ?? 0) - (sa.whole?.serviceFeeCny ?? 0);
+    const feeNote = diff > 0 ? `;拆包需多付电子服务费 ${fmtMoney(diff)}(${sa.packagesCount}份 vs 1份)` : '';
+    return `整件与拆单同属「${sa.whole.groupName}」等级,运费无差异${feeNote},建议不拆单。`;
   }
   const lines = [];
   lines.push(`不拆(整件 ${sa.whole.groupName}): ${sa.whole.formula}`);
+  if (sa.whole.serviceFeeFormula) lines.push(`　${sa.whole.serviceFeeFormula}`);
+  if (sa.whole.totalFormula) lines.push(`　${sa.whole.totalFormula}`);
   if (sa.splitEligible) {
     lines.push(`拆 ${sa.packagesCount} 包: ${sa.formula}`);
+    if (sa.serviceFeeFormula) lines.push(`　${sa.serviceFeeFormula}`);
+    if (sa.totalFormula) lines.push(`　${sa.totalFormula}`);
     lines.push(isSplitSaving(sa)
       ? `可省 ${fmtMoney(sa.saveCny)},建议拆包`
       : `拆包反而贵 ${fmtMoney(Math.abs(sa.saveCny || 0))},建议整件发出`);

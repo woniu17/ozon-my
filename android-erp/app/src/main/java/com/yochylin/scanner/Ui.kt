@@ -518,11 +518,21 @@ fun Context.buildMultiItemConfirmDialog(
             })
         })
 
+        // 费用行(2026-11-26):OGL 费用 = 运费 + 电子服务费,整件/拆包按合计口径比较
+        fun addCostRow(label: String, amount: String?, topMarginDp: Int = 2) {
+            splitSection.addView(costRow(label, amount), LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(topMarginDp) })
+        }
+
         // 不拆包费用
-        splitSection.addView(costRow("不拆包（整件）", fmtMoney(sa.whole?.deliveryCny)), LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply { topMargin = dp(8) })
+        val wholeFee = sa.whole?.serviceFeeCny
+        addCostRow("不拆包运费", fmtMoney(sa.whole?.deliveryCny), topMarginDp = 8)
+        if (wholeFee != null) {
+            addCostRow("电子服务费(1份)", fmtMoney(wholeFee))
+            addCostRow("OGL合计", fmtMoney(sa.whole?.totalCny))
+        }
         if (!sa.whole?.formula.isNullOrBlank()) {
             splitSection.addView(formulaTv(sa.whole?.formula), LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -538,13 +548,13 @@ fun Context.buildMultiItemConfirmDialog(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(1)
             ).apply { topMargin = dp(8) })
-            splitSection.addView(costRow(
-                sa.packagesCount?.let { "拆${it}包" } ?: "拆包",
-                fmtMoney(sa.best?.totalCny)
-            ), LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = dp(8) })
+            val countLabel = sa.packagesCount?.let { "拆${it}包" } ?: "拆包"
+            addCostRow("${countLabel}运费", fmtMoney(sa.best?.totalCny), topMarginDp = 8)
+            val splitFee = sa.best?.serviceFeeCny
+            if (splitFee != null) {
+                addCostRow("拆包电子服务费(${sa.packagesCount ?: 0}份)", fmtMoney(splitFee))
+                addCostRow("拆包OGL合计", fmtMoney(sa.best?.totalCostCny))
+            }
             if (!sa.formula.isNullOrBlank()) {
                 splitSection.addView(formulaTv(sa.formula), LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,

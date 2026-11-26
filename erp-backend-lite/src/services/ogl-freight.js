@@ -19,6 +19,29 @@ export const OGL_TARIFF_GROUPS = [
 
 const round2 = (n) => Math.round(n * 100) / 100;
 
+// OGL 电子服务费(2026-11-16):每件货件价值 2%,下限 15 卢布、上限 200 卢布。
+// 属于 OGL 费用的一部分;拆成 N 个货件就收 N 份,拆单分析必须计入。
+// 货件价值为 CNY,按 rubCnyRate(1 RUB = rate CNY)换算成卢布计费后再换回 CNY。
+export const OGL_ELECTRONIC_FEE_RATE = 0.02;
+export const OGL_ELECTRONIC_FEE_MIN_RUB = 15;
+export const OGL_ELECTRONIC_FEE_MAX_RUB = 200;
+
+/**
+ * OGL 电子服务费估算(CNY):max(15, min(200, 货件价值RUB × 2%)) × 汇率。
+ * 汇率缺失/非法返回 null(调用方按不含服务费展示,保持旧口径)。
+ */
+export function estimateOglElectronicFeeCny({ valueCny, rubCnyRate }) {
+  const v = Number(valueCny);
+  const rate = Number(rubCnyRate);
+  if (!Number.isFinite(v) || v <= 0 || !Number.isFinite(rate) || rate <= 0) return null;
+  const valueRub = v / rate;
+  const feeRub = Math.max(
+    OGL_ELECTRONIC_FEE_MIN_RUB,
+    Math.min(OGL_ELECTRONIC_FEE_MAX_RUB, valueRub * OGL_ELECTRONIC_FEE_RATE)
+  );
+  return round2(feeRub * rate);
+}
+
 /** 按申报价值(CNY)+重量(g)匹配评分组;参数非法或越界返回 null */
 export function getOglGroup(valueCny, weightG) {
   const v = Number(valueCny);
@@ -123,6 +146,7 @@ export function analyzeOglSplit({
   unitPriceCny,
   operateStatus,
   maxUnits = 20,
+  rubCnyRate = null,
 }) {
   const w = Number(weightG);
   const n = Number(unitQuantity);
@@ -131,10 +155,12 @@ export function analyzeOglSplit({
   if (tplIntegrationType !== 'ozon_outsourced') return { applicable: false, reason: 'not_ogl' };
   if (!Number.isFinite(v) || v <= 0 || !Number.isFinite(w) || w <= 0) return { applicable: false, reason: 'no_weight_or_amount' };
   const operable = OGL_SPLIT_OPERABLE_STATUSES.has(operateStatus);
+  // 电子服务费:每个货件一份(整件 1 份,拆 N 包 N 份);汇率缺失时 null,退化为纯运费口径
+  const feeFor = (valueCny) => estimateOglElectronicFeeCny({ valueCny, rubCnyRate });
   const whole = estimateOglFreight({ valueCny: v, weightG: w });
   if (!whole?.deliveryCny) return { applicable: false, reason: 'whole_out_of_tariff' };
 
-  const wholeInfo = buildSplitWhole(whole, v, w);
+  const wholeInfo = buildSplitWhole(whole, v, w, feeFor(v));
 
   // 不可拆:多 SKU / 超限 / 无单价 → 只提供整件运费;单件订单不展示提醒(2026-11)
   if (multiSku) {
@@ -169,6 +195,8 @@ export function analyzeOglSplit({
     if (comp.length === 1) continue; // 整件已在 whole
     const packages = [];
     let total = 0;
+    let feeSum = 0;
+    let feeKnown = true;
     let valid = true;
     for (const units of comp) {
       const pkgValue = round2(units * unitV);
@@ -176,6 +204,8 @@ export function analyzeOglSplit({
       const f = estimateOglFreight({ valueCny: pkgValue, weightG: pkgWeight });
       if (!f?.deliveryCny) { valid = false; break; }
       total += f.deliveryCny;
+      const fee = feeFor(pkgValue);
+      if (fee == null) feeKnown = false; else feeSum += fee;
       packages.push({
         units,
         valueCny: pkgValue,
@@ -186,17 +216,30 @@ export function analyzeOglSplit({
         perGram: f.group.perGram,
         variableFee: f.variableFee,
         deliveryCny: f.deliveryCny,
+        // 电子服务费(每包一份,2026-11-26)
+        serviceFeeCny: fee,
+        totalCny: fee != null ? round2(f.deliveryCny + fee) : f.deliveryCny,
         formula: `¥${f.fixedFee.toFixed(2)} + ¥${f.group.perGram}/克 × ${pkgWeight}克 = ¥${f.deliveryCny.toFixed(2)}`,
       });
     }
     if (!valid) continue;
-    const saveCny = round2(whole.deliveryCny - total);
+    const totalCostCny = round2(total + feeSum);
+    const saveCny = round2(wholeInfo.totalCny - totalCostCny);
     if (!best || saveCny > best.saveCny) {
-      best = { packages, totalCny: round2(total), saveCny };
+      best = {
+        packages,
+        totalCny: round2(total),          // 拆包运费合计(不含服务费,兼容旧展示)
+        serviceFeeCny: feeKnown ? round2(feeSum) : null,
+        totalCostCny,                     // OGL 合计 = 运费 + 电子服务费
+        saveCny,
+      };
     }
   }
 
   const saving = !!best && best.saveCny > 0;
+  const splitFeeFormula = best && best.serviceFeeCny != null
+    ? `电子服务费 ${best.packages.map((p) => '¥' + Number(p.serviceFeeCny).toFixed(2)).join(' + ')} = ¥${best.serviceFeeCny.toFixed(2)}`
+    : null;
   return {
     applicable: true,
     splitEligible: true,
@@ -207,13 +250,18 @@ export function analyzeOglSplit({
     best: best || null,
     saving,
     saveCny: best ? best.saveCny : null,
+    serviceFeeCny: best ? best.serviceFeeCny : null,
+    totalCostCny: best ? best.totalCostCny : null,
+    serviceFeeFormula: splitFeeFormula,
+    totalFormula: best && best.serviceFeeCny != null ? `OGL合计(运费+电子服务费) ¥${best.totalCostCny.toFixed(2)}` : null,
     packagesCount: best ? best.packages.length : null,
-    // 合计公式(2026-11-03 简化):每包公式已在前端逐包展示,这里只保留「包1 + 包2 = 总额」
+    // 合计公式(2026-11-03 简化):每包公式已在前端逐包展示,这里只保留「包1 + 包2 = 总额」(运费口径)
     formula: best ? `包${best.packages.map((_, i) => i + 1).join(' + 包')} = ¥${best.totalCny.toFixed(2)}` : null,
   };
 }
 
-function buildSplitWhole(whole, valueCny, weightG) {
+function buildSplitWhole(whole, valueCny, weightG, serviceFeeCny = null) {
+  const totalCny = serviceFeeCny != null ? round2(whole.deliveryCny + serviceFeeCny) : whole.deliveryCny;
   return {
     groupKey: whole.group.key,
     groupName: whole.group.name,
@@ -223,6 +271,10 @@ function buildSplitWhole(whole, valueCny, weightG) {
     perGram: whole.group.perGram,
     variableFee: whole.variableFee,
     deliveryCny: whole.deliveryCny,
+    serviceFeeCny,
+    totalCny,
+    serviceFeeFormula: serviceFeeCny != null ? `电子服务费 ¥${serviceFeeCny.toFixed(2)}` : null,
+    totalFormula: serviceFeeCny != null ? `OGL合计(运费+电子服务费) ¥${totalCny.toFixed(2)}` : null,
     formula: `¥${whole.fixedFee.toFixed(2)} + ¥${whole.group.perGram}/克 × ${weightG}克 = ¥${whole.deliveryCny.toFixed(2)}`,
   };
 }

@@ -94,6 +94,8 @@
       <view class="split-block whole">
         <view class="split-block-title">整件(不拆) · {{ pkg.splitAnalysis.whole.groupName }}档</view>
         <view class="split-formula">{{ pkg.splitAnalysis.whole.formula }}</view>
+        <view v-if="pkg.splitAnalysis.whole.serviceFeeFormula" class="split-formula">{{ pkg.splitAnalysis.whole.serviceFeeFormula }}</view>
+        <view v-if="pkg.splitAnalysis.whole.totalFormula" class="split-formula split-total-inline">{{ pkg.splitAnalysis.whole.totalFormula }}</view>
       </view>
       <template v-if="pkg.splitAnalysis.splitEligible">
         <view class="split-block best">
@@ -101,8 +103,11 @@
           <view v-for="(p, i) in pkg.splitAnalysis.best.packages" :key="i" class="split-pkg">
             <view class="split-pkg-head">包{{ i + 1 }} · {{ p.units }}件({{ p.weightG }}g, ¥{{ p.valueCny }}) · {{ p.groupName }}档</view>
             <view class="split-formula">{{ p.formula }}</view>
+            <view v-if="p.serviceFeeCny != null" class="split-formula">电子服务费 ¥{{ Number(p.serviceFeeCny).toFixed(2) }} · 合计 ¥{{ Number(p.totalCny).toFixed(2) }}</view>
           </view>
           <view class="split-total">合计: {{ pkg.splitAnalysis.formula }}</view>
+          <view v-if="pkg.splitAnalysis.serviceFeeFormula" class="split-total">+ {{ pkg.splitAnalysis.serviceFeeFormula }}</view>
+          <view v-if="pkg.splitAnalysis.totalFormula" class="split-total">{{ pkg.splitAnalysis.totalFormula }}</view>
         </view>
       </template>
     </view>
@@ -490,7 +495,7 @@ function detailSplitStatusCls(pkg) {
 function detailSplitConclusion(pkg) {
   const sa = pkg?.splitAnalysis;
   if (!sa) return '';
-  if (!sa.splitEligible) return `整件运费 ${fmtMoney(sa.whole?.deliveryCny)}`;
+  if (!sa.splitEligible) return `整件OGL ${fmtMoney(sa.whole?.totalCny ?? sa.whole?.deliveryCny)}`;
   if (detailSplitSaving(sa)) return `拆${sa.packagesCount}包可省 ${fmtMoney(sa.saveCny)}`;
   return `拆${sa.packagesCount}包贵 ${fmtMoney(Math.abs(sa.saveCny || 0))},不拆比较好`;
 }
