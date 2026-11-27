@@ -145,45 +145,106 @@ body {
   word-break: break-all;
 }
 
-/* ── 拼多多登录同步区块(2026-09-14)────────────────────── */
+/* ── 拼多多登录同步区块(2026-09-14;排版优化 2026-11-27)────── */
 .pdd-sync {
-  padding: 10px;
+  padding: 12px;
   background: #fff;
   border: 1px solid #f0f0f0;
-  border-radius: 6px;
+  border-radius: 8px;
 }
 
-.pdd-login-state {
+/* 提示文字只作用于区块描述,不干扰块内小字 */
+.pdd-sync > .hint {
   margin-bottom: 8px;
-  padding: 5px 8px;
+  line-height: 1.5;
+}
+
+.pdd-block {
+  padding-top: 10px;
+  border-top: 1px dashed #f0f0f0;
+}
+
+.pdd-block + .pdd-block {
+  margin-top: 10px;
+}
+
+.pdd-block:first-of-type {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.pdd-block-title {
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #8c8c8c;
+  letter-spacing: 0.5px;
+}
+
+/* 状态行:圆点 + 文案,按 data-state 着色 */
+.pdd-status-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 0;
+  padding: 6px 8px;
   font-size: 12px;
-  border-radius: 4px;
-  background: #f5f5f5;
   color: #595959;
-  word-break: break-all;
+  background: #fafafa;
+  border: 1px solid transparent;
+  border-radius: 5px;
 }
 
-.pdd-login-state.ok {
+.pdd-status-row .dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #bfbfbf;
+}
+
+.pdd-status-row[data-state='ok'] {
+  color: #237804;
   background: #f6ffed;
-  color: #389e0d;
-  border: 1px solid #d9f7be;
+  border-color: #d9f7be;
 }
 
-.pdd-login-state.err {
+.pdd-status-row[data-state='ok'] .dot {
+  background: #52c41a;
+}
+
+.pdd-status-row[data-state='err'] {
+  color: #a8071a;
   background: #fff1f0;
-  color: #d4380d;
-  border: 1px solid #ffccc7;
+  border-color: #ffccc7;
 }
 
-.pdd-account-row {
+.pdd-status-row[data-state='err'] .dot {
+  background: #f5222d;
+}
+
+.pdd-status-text {
+  min-width: 0;
+  line-height: 1.4;
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
+/* 下拉框:后端选择独占一行 */
+.select-block {
+  width: 100%;
+  padding: 6px 8px;
+}
+
+.pdd-sync-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 2px;
+  margin-top: 8px;
 }
 
 .pdd-account-label {
-  flex-shrink: 0;
+  flex: 0 0 auto;
   font-size: 12px;
   color: #595959;
 }
@@ -191,30 +252,52 @@ body {
 .select {
   flex: 1;
   min-width: 0;
-  padding: 4px 6px;
+  padding: 6px 8px;
   font-size: 13px;
   color: #262626;
   background: #fff;
   border: 1px solid #d9d9d9;
   border-radius: 4px;
   outline: none;
+  transition: border-color 0.2s;
 }
 
 .select:focus {
   border-color: #d4380d;
 }
 
-/* ── ERP 直连登录行(2026-09-15)───────────────────────── */
+.hint-inline {
+  margin: 6px 0 0;
+  line-height: 1.4;
+}
+
+/* ── ERP 直连登录(2026-09-15;2026-11-27 输入框整行铺开)── */
 .erp-login-row {
   display: flex;
+  flex-direction: column;
   gap: 6px;
-  margin-bottom: 8px;
+  margin-top: 8px;
+  padding: 8px;
+  background: #fafafa;
+  border: 1px dashed #e8e8e8;
+  border-radius: 6px;
+}
+
+.erp-login-fields {
+  display: flex;
+  gap: 6px;
+}
+
+/* hidden 属性必须压过 .erp-login-row 的 display:flex,否则已登录时登录表单仍显示 */
+.erp-login-row[hidden] {
+  display: none;
 }
 
 .erp-login-row .input {
+  flex: 1;
   min-width: 0;
-  padding: 4px 6px;
-  font-size: 13px;
+  padding: 6px 8px;
+  font-size: 12px;
   color: #262626;
   background: #fff;
   border: 1px solid #d9d9d9;
@@ -225,17 +308,23 @@ body {
 
 .erp-login-row .input:focus {
   border-color: #d4380d;
+  box-shadow: 0 0 0 2px rgba(212, 56, 13, 0.12);
 }
 
-#erp-phone {
-  flex: 0 0 96px;
+/* 通用整行按钮 */
+.btn-block {
+  display: block;
+  flex: none;
+  width: 100%;
+  padding: 7px 12px;
 }
 
-#erp-password {
-  flex: 1;
+.pdd-block > .btn-block {
+  margin-top: 8px;
 }
 
-#erp-login-btn {
-  flex: 0 0 auto;
-  padding: 4px 10px;
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
+

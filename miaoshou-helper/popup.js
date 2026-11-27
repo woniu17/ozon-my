@@ -66,8 +66,10 @@
   // 2026-09-15 起直连 ERP 后端:popup 登录(手机号+密码→JWT)后,
   // 账号列表/cookie 同步均由 background 直接 fetch 后端 API,无需打开 ERP 页面
   const $state = document.getElementById('pdd-login-state');
+  const $pddAuthRow = document.getElementById('pdd-auth-row');
   const $backend = document.getElementById('erp-backend');
   const $erpAuthState = document.getElementById('erp-auth-state');
+  const $erpAuthRow = document.getElementById('erp-auth-row');
   const $erpLoginRow = document.getElementById('erp-login-row');
   const $erpPhone = document.getElementById('erp-phone');
   const $erpPassword = document.getElementById('erp-password');
@@ -111,11 +113,11 @@
     if (r && r.ok && r.loggedIn) {
       const who = (r.user && (r.user.phone || r.user.username)) || '已登录';
       $erpAuthState.textContent = `ERP 已登录：${who}`;
-      $erpAuthState.className = 'pdd-login-state ok';
+      $erpAuthRow.dataset.state = 'ok';
       $erpLoginRow.hidden = true;
     } else {
-      $erpAuthState.textContent = `ERP 未登录(${(r && r.backend) || '未知后端'})`;
-      $erpAuthState.className = 'pdd-login-state err';
+      $erpAuthState.textContent = 'ERP 未登录,请先登录';
+      $erpAuthRow.dataset.state = 'err';
       $erpLoginRow.hidden = false;
     }
   }
@@ -166,10 +168,11 @@
     if (st && st.loggedIn) {
       const who = st.nickname ? `${st.nickname} (${st.uid})` : st.uid;
       $state.textContent = `已登录：${who}`;
-      $state.classList.add('ok');
+      $pddAuthRow.dataset.state = 'ok';
     } else {
       $state.textContent = '未登录拼多多(请先在本浏览器登录 mobile.yangkeduo.com)';
-      $state.classList.add('err');
+      $pddAuthRow.dataset.state = 'err';
+      $account.disabled = true;
       $syncBtn.disabled = true;
       return; // 未登录时不拉账号(同步按钮保持禁用)
     }
