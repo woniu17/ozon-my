@@ -135,6 +135,10 @@ function loadExistingKeys() {
     .all();
   for (const r of rows) {
     set.add(sourceIdentityKey({ sku: r.sku, platform: r.platform, gid: r.gid, sid: r.sid, spec: r.spec }));
+    // 有 skuID 的行同时覆盖「按规格」口径:老采购单缺 skuID 时不重复生成候选
+    if (r.sid) {
+      set.add(sourceIdentityKey({ sku: r.sku, platform: r.platform, gid: r.gid, sid: '', spec: r.spec }));
+    }
   }
   return set;
 }
@@ -358,9 +362,17 @@ export function getSkuDetail(sku) {
     .prepare(`SELECT sp.* FROM op_supplier_product sp WHERE sp.ozon_sku = ? ORDER BY sp.is_primary DESC, sp.id DESC`)
     .all(Number(sku));
   const sources = rows.map((r) => mapSourceRow(r, new Map([[String(sku), brief]])));
-  const existing = new Set(sources.map((s) => sourceIdentityKey({
-    sku, platform: s.platform, gid: s.sourceItemId, sid: s.sourceSkuId, spec: s.sourceSpec,
-  })));
+  const existing = new Set();
+  for (const s of sources) {
+    existing.add(sourceIdentityKey({
+      sku, platform: s.platform, gid: s.sourceItemId, sid: s.sourceSkuId, spec: s.sourceSpec,
+    }));
+    if (s.sourceSkuId) {
+      existing.add(sourceIdentityKey({
+        sku, platform: s.platform, gid: s.sourceItemId, sid: '', spec: s.sourceSpec,
+      }));
+    }
+  }
   const candMap = collectHistoryCandidates({ sku });
   const candidates = [...candMap.values()].map((c) => ({
     ...c,
@@ -429,7 +441,7 @@ export function upsertSource(p = {}) {
   const now = nowIso();
 
   // 身份键:有平台规格SKU(如 1688 skuID)按 skuID;无 skuID(拼多多)按规格文本区分
-  const existing = sourceSkuId
+  let existing = sourceSkuId
     ? db
         .prepare(
           `SELECT id, is_primary FROM op_supplier_product
@@ -445,6 +457,30 @@ export function upsertSource(p = {}) {
              AND COALESCE(source_sku_id, '') = '' AND COALESCE(source_spec, '') = ?`
         )
         .get(storeId, ozonSku, platform, sourceItemId, sourceSpec);
+  // 老数据升级:历史行无 skuID(旧补全链路),补到 skuID 后命中旧行并回填,避免重复建档
+  let upgradeSkuId = false;
+  if (!existing && sourceSkuId) {
+    existing = db
+      .prepare(
+        `SELECT id, is_primary FROM op_supplier_product
+         WHERE store_id = ? AND COALESCE(ozon_sku, 0) = ? AND platform = ?
+           AND COALESCE(source_item_id, '') = ?
+           AND COALESCE(source_sku_id, '') = '' AND COALESCE(source_spec, '') = ?`
+      )
+      .get(storeId, ozonSku, platform, sourceItemId, sourceSpec);
+    if (existing) upgradeSkuId = true;
+  }
+  // 反向兼容:来货无 skuID(老采购单)但库中已有同规格带 skuID 的行 → 命中已有行,避免重复建档
+  if (!existing && !sourceSkuId && sourceSpec) {
+    existing = db
+      .prepare(
+        `SELECT id, is_primary FROM op_supplier_product
+         WHERE store_id = ? AND COALESCE(ozon_sku, 0) = ? AND platform = ?
+           AND COALESCE(source_item_id, '') = ? AND COALESCE(source_spec, '') = ?
+         ORDER BY is_primary DESC, id DESC LIMIT 1`
+      )
+      .get(storeId, ozonSku, platform, sourceItemId, sourceSpec);
+  }
 
   const sets = [];
   const args = [];
@@ -453,6 +489,7 @@ export function upsertSource(p = {}) {
     sets.push(`${col} = ?`);
     args.push(val);
   };
+  if (upgradeSkuId) set('source_sku_id', sourceSkuId);
   set('offer_id', offerId || null);
   set('source_url', sourceUrl || null);
   set('title', isBlank(p.title) ? undefined : String(p.title));
