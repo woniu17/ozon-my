@@ -383,6 +383,108 @@ fun Context.showPackageMetaEditDialog(
 }
 
 /**
+ * 统一风格二次确认对话框(2026-11-28,与订单处理页「编辑标签/备注」弹窗同款):
+ * 90% 宽 16dp 圆角卡片 + 17sp 加粗标题 + 浅灰圆角内容区 + 右下取消/确认。
+ * @param title 标题
+ * @param message 内容(可换行;为空则只显示标题)
+ * @param confirmText 确认按钮文案
+ * @param cancelText 取消按钮文案
+ * @param onConfirm 点击确认回调(点击后自动关闭)
+ */
+fun Context.showStyledConfirmDialog(
+    title: String,
+    message: CharSequence? = null,
+    confirmText: String = "确定",
+    cancelText: String = "取消",
+    onConfirm: () -> Unit,
+) {
+    val density = resources.displayMetrics.density
+    fun dp(v: Int) = (v * density + 0.5f).toInt()
+
+    lateinit var dialog: Dialog
+    val titleTv = TextView(this).apply {
+        text = title
+        textSize = 17f
+        setTextColor(0xFF1D2129.toInt())
+        setTypeface(null, Typeface.BOLD)
+    }
+    val contentBox = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        if (!message.isNullOrBlank()) {
+            background = GradientDrawable().apply {
+                setColor(0xFFF7F8FA.toInt())
+                cornerRadius = dp(10).toFloat()
+            }
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            addView(TextView(this@showStyledConfirmDialog).apply {
+                text = message
+                textSize = 13f
+                setTextColor(0xFF4E5969.toInt())
+                setLineSpacing(dp(4).toFloat(), 1f)
+            })
+        }
+    }
+    val cancelBtn = TextView(this).apply {
+        text = cancelText
+        textSize = 14f
+        setTextColor(0xFF4E5969.toInt())
+        setPadding(dp(22), dp(9), dp(22), dp(9))
+        setRoundedBg(0xFFF2F3F5.toInt(), 9f)
+        setOnClickListener { dialog.dismiss() }
+    }
+    val confirmBtn = TextView(this).apply {
+        text = confirmText
+        textSize = 14f
+        setTextColor(Color.WHITE)
+        setTypeface(null, Typeface.BOLD)
+        setPadding(dp(26), dp(9), dp(26), dp(9))
+        setRoundedBg(0xFF165DFF.toInt(), 9f)
+        setOnClickListener {
+            dialog.dismiss()
+            onConfirm()
+        }
+    }
+    val btnRow = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.END
+        addView(cancelBtn)
+        addView(confirmBtn, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { leftMargin = dp(10) })
+    }
+
+    val root = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(20), dp(20), dp(20), dp(20))
+        addView(titleTv)
+        if (contentBox.childCount > 0) {
+            addView(contentBox, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(16) })
+        }
+        addView(btnRow, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(16) })
+    }
+
+    dialog = Dialog(this)
+    dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+    dialog.setContentView(root)
+    dialog.setCanceledOnTouchOutside(true)
+    dialog.window?.apply {
+        setBackgroundDrawable(GradientDrawable().apply {
+            setColor(Color.WHITE)
+            cornerRadius = dp(16).toFloat()
+        })
+        setLayout((resources.displayMetrics.widthPixels * 0.90).toInt(), WindowManager.LayoutParams.WRAP_CONTENT)
+    }
+    dialog.show()
+}
+
+/**
  * 单输入框编辑对话框(2026-11-28,风格对齐订单处理页「编辑标签/备注」弹窗):
  * 圆角卡片 + 标题/副标题 + 分区小标签 + 灰色圆角输入框 + 右下取消/保存 + 可选左侧清除。
  * @param title 标题

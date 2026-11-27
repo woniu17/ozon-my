@@ -1,7 +1,6 @@
 package com.yochylin.scanner
 
 import android.app.Activity
-import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
@@ -398,12 +397,11 @@ class PrePurchaseFragment : Fragment() {
                         .append(sn.ifBlank { "#$id" })
                     if (name.isNotBlank()) desc.append(" · ").append(name)
                 }
-                AlertDialog.Builder(requireContext())
-                    .setTitle("预采购确认签收")
-                    .setMessage("发现待收货预采购订单:\n$desc\n\n是否确认签收?")
-                    .setPositiveButton("确认签收") { _, _ -> confirmReceive(ids) }
-                    .setNegativeButton("取消", null)
-                    .show()
+                requireContext().showStyledConfirmDialog(
+                    title = "预采购确认签收",
+                    message = "发现待收货预采购订单:\n$desc\n\n确认后标记为已签收,是否继续?",
+                    confirmText = "确认签收",
+                ) { confirmReceive(ids) }
             } catch (e: Exception) {
                 toast(e.message ?: "查询失败")
             }
@@ -434,12 +432,11 @@ class PrePurchaseFragment : Fragment() {
         desc.append("\n快递:")
             .append(listOf(row.logisticsCompany, row.logisticsNo).filter { it.isNotBlank() }.joinToString(" ").ifBlank { "—" })
         desc.append("\n金额:").append(fmtMoney(row.paymentAmount))
-        AlertDialog.Builder(requireContext())
-            .setTitle("预采购确认签收")
-            .setMessage("$desc\n\n确认后该预采购将标记为已签收,是否继续?")
-            .setPositiveButton("确认签收") { _, _ -> confirmReceive(listOf(row.id)) }
-            .setNegativeButton("取消", null)
-            .show()
+        requireContext().showStyledConfirmDialog(
+            title = "预采购确认签收",
+            message = "$desc\n\n确认后该预采购将标记为已签收,是否继续?",
+            confirmText = "确认签收",
+        ) { confirmReceive(listOf(row.id)) }
     }
 
     private var updatingId: Long? = null
