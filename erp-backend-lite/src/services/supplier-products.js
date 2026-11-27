@@ -50,7 +50,7 @@ export function buildSourceUrl(platform, itemId) {
     case 'pdd':
       return `https://mobile.yangkeduo.com/goods.html?goods_id=${id}`;
     case 'xianyu':
-      return '';
+      return `https://www.goofish.com/item?id=${id}`;
     default:
       return '';
   }
@@ -62,12 +62,13 @@ export function parseSourceItemId(input) {
   if (!s) return '';
   const m = /offer\/(\d{6,})/i.exec(s)
     || /goods_id=(\d{6,})/i.exec(s)
+    || /[?&](?:id|itemId)=(\d{6,})/i.exec(s)
     || /(\d{6,})/.exec(s);
   return m ? m[1] : '';
 }
 
-// 支持维护货源的平台(2026-11-27:1688 + 拼多多 + 淘宝;闲鱼后续按需放开)
-export const SUPPORTED_SOURCE_PLATFORMS = new Set(['1688', 'yangkeduo', 'taobao']);
+// 支持维护货源的平台(2026-11-28:1688 + 拼多多 + 淘宝 + 闲鱼)
+export const SUPPORTED_SOURCE_PLATFORMS = new Set(['1688', 'yangkeduo', 'taobao', 'xianyu']);
 const SOURCE_PLATFORM_ALIASES = { ali1688: '1688', pdd: 'yangkeduo' };
 
 export function normalizeSourcePlatform(p) {
@@ -79,6 +80,7 @@ export function normalizeSourcePlatform(p) {
 export function detectSourcePlatform(input, fallback = '1688') {
   const s = String(input || '').toLowerCase();
   if (/yangkeduo|pinduoduo/.test(s)) return 'yangkeduo';
+  if (/goofish|xianyu|2\.taobao/.test(s)) return 'xianyu';
   if (/taobao|tmall/.test(s)) return 'taobao';
   if (/1688/.test(s)) return '1688';
   return normalizeSourcePlatform(fallback) || '1688';

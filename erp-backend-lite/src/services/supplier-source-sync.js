@@ -4,12 +4,14 @@
 //   - 拼多多:分页拉取全部订单(offset 游标),一次覆盖全部缺失单号,避免逐单搜索(逐单需开详情页取优惠,慢)
 //   - 1688:按单号搜索(官方 OpenAPI buyerView,约 1.5s/单,限速)
 //   - 淘宝:按单号搜索(浏览器 mtop,约 2s/单,限速)
+//   - 闲鱼:按单号搜索(浏览器列表翻页比对,约 2s/单,限速)
 // 任务在进程内后台执行,状态通过 /sync-missing-goods-status 轮询;同一时间只允许一个任务。
 import { db } from '../db/index.js';
 import { enrichPurchaseItems } from '../db/dao/sqlite/order-daos.js';
 import { accumulateFromPurchaseOrder, backfillFromHistory } from './supplier-products.js';
 import { fetchPddOrdersPaged } from './platform-orders/adapters/pdd.js';
 import { searchTaobaoOrder } from './platform-orders/adapters/taobao.js';
+import { searchXianyuOrder } from './platform-orders/adapters/xianyu.js';
 import { searchAliOrder } from '../modules/platform-orders.js';
 import config from '../config/index.js';
 import logger from '../middleware/log.js';
@@ -208,13 +210,23 @@ function syncTaobao() {
   });
 }
 
+function syncXianyu() {
+  return syncByOrderSearch({
+    platform: 'xianyu',
+    label: '闲鱼',
+    accounts: config.platformAccounts.xianyu || [],
+    searchFn: searchXianyuOrder,
+    intervalMs: 2000, // 列表翻页比对单号,直接走浏览器
+  });
+}
+
 /**
  * 启动补齐任务(后台执行,立即返回)
  * @param {{platforms?: string[]}} [opts] 默认先拼多多后 1688
  */
-export function startMissingGoodsSync({ platforms = ['yangkeduo', '1688', 'taobao'] } = {}) {
+export function startMissingGoodsSync({ platforms = ['yangkeduo', '1688', 'taobao', 'xianyu'] } = {}) {
   if (state.running) return { started: false, running: true, state: getMissingSyncState() };
-  const list = Array.isArray(platforms) && platforms.length ? platforms : ['yangkeduo', '1688', 'taobao'];
+  const list = Array.isArray(platforms) && platforms.length ? platforms : ['yangkeduo', '1688', 'taobao', 'xianyu'];
   state = { ...INITIAL, running: true, startedAt: new Date().toISOString(), platforms: list };
   (async () => {
     try {
@@ -229,6 +241,10 @@ export function startMissingGoodsSync({ platforms = ['yangkeduo', '1688', 'taoba
       if (list.includes('taobao')) {
         state.phase = 'taobao';
         await syncTaobao();
+      }
+      if (list.includes('xianyu')) {
+        state.phase = 'xianyu';
+        await syncXianyu();
       }
       state.phase = 'backfill';
       state.lastResult = backfillFromHistory();
