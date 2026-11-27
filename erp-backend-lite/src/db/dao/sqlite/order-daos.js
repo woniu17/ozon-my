@@ -1780,6 +1780,10 @@ export function enrichPurchaseItems(items) {
         .map((g) => ({
           goodsName: g.goodsName || '',
           goodsId: g.goodsId || '', // 商品ID(1688 offerId/拼多多 goodsId/淘宝 itemId),拼详情页链接用
+          // 2026-11-27:货源维护字段(1688 skuID/货号/下单快照),有则保留
+          skuId: g.skuId || '',
+          cargoNumber: g.cargoNumber || '',
+          snapshotUrl: g.snapshotUrl || '',
           spec: g.spec || '',
           price: g.price,
           number: g.number || 1,

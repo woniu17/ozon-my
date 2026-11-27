@@ -800,7 +800,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_op_pl_unique ON op_purchase_link(purchase_
 CREATE INDEX IF NOT EXISTS idx_op_pl_pkg ON op_purchase_link(package_id);
 CREATE INDEX IF NOT EXISTS idx_op_pl_item ON op_purchase_link(ozon_order_item_id);
 
--- 货源映射(模式A保存时1688订单详情自动积累)
+-- 货源映射(2026-11-27 启用):Ozon SKU ↔ 平台货源商品(1688 优先)
+-- 采购保存/补全时自动积累(单商品行无歧义场景);多商品行订单只生成候选,人工确认
 CREATE TABLE IF NOT EXISTS op_supplier_product (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   store_id        TEXT NOT NULL,
@@ -808,16 +809,30 @@ CREATE TABLE IF NOT EXISTS op_supplier_product (
   ozon_sku        INTEGER,
   platform        TEXT NOT NULL DEFAULT '1688',
   source_url      TEXT,
-  source_item_id  TEXT,                         -- 1688 商品ID(采购补全自动写入)
-  title           TEXT,
-  spec_mapping    TEXT,                         -- 规格映射 JSON
+  source_item_id  TEXT,                         -- 1688 商品ID(offerId;采购自动写入)
+  source_sku_id   TEXT,                         -- 1688 规格 SKU ID(skuID)
+  source_spec     TEXT,                         -- 1688 规格文本(颜色:xx;尺码:yy)
+  source_image    TEXT,                         -- 1688 商品图(原图/本地图床URL)
+  seller_name     TEXT,                         -- 供应商
+  buyer_account   TEXT,                         -- 采购账号
+  title           TEXT,                         -- 货源商品标题
+  spec_mapping    TEXT,                         -- 规格映射 JSON(预留:Ozon属性↔1688规格)
+  last_price      REAL,                         -- 最近采购单价(按货源商品行)
+  last_purchase_at TEXT,                        -- 最近采购时间
+  last_purchase_sn TEXT,                        -- 最近采购单号
+  purchase_count  INTEGER DEFAULT 0,            -- 采购次数(去重采购单)
+  quantity_ratio  REAL DEFAULT 1,               -- 1 个 Ozon 件 = N 个货源商品(多件装)
+  is_primary      INTEGER DEFAULT 0,            -- 常用货源
   enabled         INTEGER DEFAULT 1,
+  note            TEXT,
   gmt_create      TEXT,
   gmt_modified    TEXT
 );
--- 表级 UNIQUE 不允许表达式,用表达式唯一索引(offer_id 空串归一)
-CREATE UNIQUE INDEX IF NOT EXISTS idx_op_sp_offer_source
-  ON op_supplier_product(store_id, COALESCE(offer_id, ''), source_item_id);
+-- 唯一键:同一店铺 SKU 的同一平台货源(商品ID+规格SKU)只保留一行
+CREATE UNIQUE INDEX IF NOT EXISTS idx_op_sp_sku_source
+  ON op_supplier_product(store_id, COALESCE(ozon_sku, 0), platform, COALESCE(source_item_id, ''), COALESCE(source_sku_id, ''));
+CREATE INDEX IF NOT EXISTS idx_op_sp_sku ON op_supplier_product(ozon_sku);
+CREATE INDEX IF NOT EXISTS idx_op_sp_store ON op_supplier_product(store_id);
 
 -- 国内物流轨迹(上家→我)
 CREATE TABLE IF NOT EXISTS op_logistics_trace (

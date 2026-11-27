@@ -181,6 +181,10 @@ function normalizeOpenApiOrder(o, account) {
     goods: entries.map((e) => ({
       goodsName: e.name || '',
       goodsId: String(e.productID || e.offerId || ''), // 商品ID(=offerId),拼详情页 detail.1688.com/offer/{id}.html
+      // 2026-11-27:货源维护需要规格SKU ID/货号/下单快照,随商品行落库(items_json)
+      skuId: String(e.skuID || e.skuId || ''),
+      cargoNumber: String(e.cargoNumber || e.productCargoNumber || ''),
+      snapshotUrl: String(e.productSnapshotUrl || ''),
       spec: (Array.isArray(e.skuInfos) ? e.skuInfos : []).map((s) => `${s.name}:${s.value}`).join(' '),
       price: Number(e.price || 0).toFixed(2),
       number: Number(e.quantity || 1),

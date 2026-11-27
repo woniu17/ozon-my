@@ -80,6 +80,7 @@ import { getAccrualsByPackageIds, getAccrualTypeSumsByPackageIds, getRubCnyRate,
 import { stripImageSizeSuffix, imageCacheUrlFor, ensureImageCached } from '../services/order-image-cache.js';
 import { attachPostingProductImages } from '../services/posting-image.js';
 import { runAccrualByDaySync } from '../services/accrual-byday-sync.js';
+import * as supplierProductsService from '../services/supplier-products.js';
 import { getPendingExportState } from '../db/dao/sqlite/purchase-sync-dao.js';
 import {
   DELIVERY_BASE_CNY,
@@ -975,6 +976,11 @@ async function autoEnrichPurchase(dbPlatform, orderSn) {
       goods: hasThumb ? [] : result.goods, // 已有图只回填卖家名,不重复写 items_json
     }]);
     if (r.updated > 0) logger.info({ platform: dbPlatform, purchaseSn: orderSn, goods: result.goods.length }, '[order-process] 采购单自动补全完成');
+    // 2026-11-27:补全后采购单具备商品行 → 单商品行单 SKU 时自动积累货源
+    try {
+      const sp = supplierProductsService.accumulateFromPurchaseOrder(po.id);
+      if (sp.updated) logger.info({ purchaseOrderId: po.id, sourceId: sp.id }, '[order-process] 补全后自动积累货源');
+    } catch { /* 货源积累失败不阻塞补全 */ }
   } catch (e) {
     logger.warn({ platform: dbPlatform, purchaseSn: orderSn, err: e?.message }, '[order-process] 采购单自动补全失败(可手动补全兜底)');
   }
@@ -1027,6 +1033,15 @@ router.post('/admin/api/order-process/purchase', (req, res, next) => {
       itemsJson,
       allocMode: isAuto ? 'auto' : 'manual',
     });
+    // 2026-11-27:单商品行且单 SKU 的采购 → 自动积累货源(多商品行只生成候选,人工确认)
+    try {
+      const sp = supplierProductsService.accumulateFromPurchaseOrder(r.purchaseOrderId);
+      if (sp.updated) {
+        logger.info({ purchaseOrderId: r.purchaseOrderId, sourceId: sp.id, created: sp.created }, '[order-process] 采购自动积累货源');
+      }
+    } catch (e) {
+      logger.warn({ purchaseOrderId: r.purchaseOrderId, err: e?.message }, '[order-process] 采购自动积累货源失败');
+    }
     // 异步自动补全:无 goods 写入(手填)或未填卖家名时,且是可搜索平台的单一单号,后台拉详情
     // 2026-10-29:放宽为"无图或缺卖家名"都触发——带平台商品图提交但卖家名为空的单,
     // 也会走 autoEnrichPurchase(内部已有图则只回填卖家名、不覆盖 items_json)
@@ -3835,6 +3850,19 @@ router.post('/admin/api/order-process/enrich-purchase-items', (req, res, next) =
     if (!items.length) return res.json(ok({ updated: 0, skipped: 0 }));
     const result = orderPackageDao.enrichPurchaseItems(items);
     logger.info(result, '[order-process] 补全采购订单商品信息完成');
+    // 2026-11-27:补全后单商品行单 SKU 的采购单自动积累货源(异步,不阻塞响应)
+    setImmediate(() => {
+      const seen = new Set();
+      for (const it of items) {
+        const platform = it.platform || 'yangkeduo';
+        const sn = it.purchaseSn;
+        if (!sn || seen.has(`${platform}|${sn}`)) continue;
+        seen.add(`${platform}|${sn}`);
+        try {
+          supplierProductsService.accumulateByPurchaseSn(platform, sn);
+        } catch { /* 忽略单条失败 */ }
+      }
+    });
     res.json(ok(result));
   } catch (e) {
     next(e);

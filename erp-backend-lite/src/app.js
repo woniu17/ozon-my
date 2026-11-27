@@ -58,6 +58,7 @@ import productArchiveRoutes from './modules/product-archive.js';
 import exportExcelRoutes from './modules/export-excel.js';
 import platformOrdersRoutes from './modules/platform-orders.js';
 import prePurchaseRoutes from './modules/pre-purchase.js';
+import supplierProductsRoutes from './modules/supplier-products.js';
 import listingMaterialsRoutes from './modules/listing-materials.js';
 import taskLogRoutes, { startTaskLogRetention, stopTaskLogRetention } from './modules/task-logs.js';
 import storeHealthRoutes from './modules/store-health.js';
@@ -230,6 +231,7 @@ app.use(productArchiveRoutes);
 app.use(exportExcelRoutes);
 app.use(platformOrdersRoutes);
 app.use(prePurchaseRoutes);
+app.use(supplierProductsRoutes);
 app.use(listingMaterialsRoutes);
 app.use(taskLogRoutes);
 // 服务端推送（长轮询接收端点，JWT 保护）

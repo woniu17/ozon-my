@@ -53,6 +53,10 @@ function normalize1688Order(o) {
     goods: entries.map((e) => ({
       goodsName: e.productName || '',
       goodsId: String(e.productID || e.offerId || ''), // 商品ID(=offerId),拼详情页 detail.1688.com/offer/{id}.html
+      // 2026-11-27:货源维护需要规格SKU ID/货号/下单快照
+      skuId: String(e.skuID || e.skuId || ''),
+      cargoNumber: String(e.cargoNumber || e.productCargoNumber || ''),
+      snapshotUrl: String(e.productSnapshotUrl || ''),
       spec: ((e.specInfo && e.specInfo.specItems) || []).map((i) => `${i.specName}:${i.specValue}`).join(' '),
       price: toYuan(e.price),
       number: Number((e.quantity && (e.quantity.realAmountStr || e.quantity.calAmount)) || 1),

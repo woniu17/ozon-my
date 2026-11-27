@@ -6,6 +6,7 @@ import Listings from '../views/Listings.vue';
 import CollectBoxV2 from '../views/CollectBoxV2.vue';
 import Preview from '../views/Preview.vue';
 import Products from '../views/Products.vue';
+import SupplierProducts from '../views/SupplierProducts.vue';
 import ProductDetailCompare from '../views/ProductDetailCompare.vue';
 import Batch from '../views/Batch.vue';
 import Materials from '../views/Materials.vue';
@@ -51,6 +52,7 @@ const router = createRouter({
     { path: '/collect-box-v2', name: 'collect-box-v2', component: CollectBoxV2 },
     { path: '/preview/:sku', name: 'preview', component: Preview, meta: { title: '上架预览' } },
     { path: '/products', name: 'products', component: Products },
+    { path: '/supplier-products', name: 'supplier-products', component: SupplierProducts, meta: { title: '货源管理' } },
     { path: '/products/detail/:sku', name: 'product-detail', component: ProductDetailCompare, meta: { title: '商品详情对比' } },
     { path: '/batch', name: 'batch', component: Batch },
     { path: '/materials', name: 'materials', component: Materials, meta: { title: '素材管理' } },

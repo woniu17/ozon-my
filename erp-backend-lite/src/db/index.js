@@ -100,6 +100,35 @@ export async function initSchema() {
   }
   db.exec(`DROP INDEX IF EXISTS uq_carriage_posting_current`);
   db.exec(`DROP INDEX IF EXISTS idx_carriage_posting_active`);
+  // 2026-11-27: op_supplier_product 货源表补列(旧库表结构早于货源功能;新库由 schema.sql 直接建全)。
+  // 必须在 exec(schema.sql) 之前执行:新唯一索引引用 source_sku_id 等新列,旧库需先 ALTER 才能建索引。
+  try {
+    const _spCols = db.prepare(`PRAGMA table_info(op_supplier_product)`).all();
+    if (_spCols.length > 0) {
+      const addSpCol = (name, type) => {
+        if (!_spCols.some((c) => c.name === name)) {
+          db.exec(`ALTER TABLE op_supplier_product ADD COLUMN ${name} ${type}`);
+          console.log(`[db] migration: added column op_supplier_product.${name}`);
+        }
+      };
+      addSpCol('source_sku_id', 'TEXT');
+      addSpCol('source_spec', 'TEXT');
+      addSpCol('source_image', 'TEXT');
+      addSpCol('seller_name', 'TEXT');
+      addSpCol('buyer_account', 'TEXT');
+      addSpCol('last_price', 'REAL');
+      addSpCol('last_purchase_at', 'TEXT');
+      addSpCol('last_purchase_sn', 'TEXT');
+      addSpCol('purchase_count', 'INTEGER DEFAULT 0');
+      addSpCol('quantity_ratio', 'REAL DEFAULT 1');
+      addSpCol('is_primary', 'INTEGER DEFAULT 0');
+      addSpCol('note', 'TEXT');
+      // 旧唯一索引(store_id + offer_id + source_item_id)会阻止同一商品多规格建档,废弃
+      db.exec('DROP INDEX IF EXISTS idx_op_sp_offer_source');
+    }
+  } catch (e) {
+    console.error('[db] migration op_supplier_product columns failed:', e?.message || e);
+  }
 
   const sql = readFileSync(SCHEMA_PATH, 'utf-8');
   db.exec(sql);
