@@ -3,11 +3,13 @@
 // 本任务按平台重拉订单详情商品行,写回 items_json 并自动积累货源;结束后统一跑一次货源回填。
 //   - 拼多多:分页拉取全部订单(offset 游标),一次覆盖全部缺失单号,避免逐单搜索(逐单需开详情页取优惠,慢)
 //   - 1688:按单号搜索(官方 OpenAPI buyerView,约 1.5s/单,限速)
+//   - 淘宝:按单号搜索(浏览器 mtop,约 2s/单,限速)
 // 任务在进程内后台执行,状态通过 /sync-missing-goods-status 轮询;同一时间只允许一个任务。
 import { db } from '../db/index.js';
 import { enrichPurchaseItems } from '../db/dao/sqlite/order-daos.js';
 import { accumulateFromPurchaseOrder, backfillFromHistory } from './supplier-products.js';
 import { fetchPddOrdersPaged } from './platform-orders/adapters/pdd.js';
+import { searchTaobaoOrder } from './platform-orders/adapters/taobao.js';
 import { searchAliOrder } from '../modules/platform-orders.js';
 import config from '../config/index.js';
 import logger from '../middleware/log.js';
@@ -149,23 +151,22 @@ async function syncPdd() {
   );
 }
 
-/** 1688:按单号搜索(OpenAPI,限速) */
-async function syncAli1688() {
-  const rows = listMissing('1688');
+/** 按单号逐单搜索补齐(1688 OpenAPI / 淘宝浏览器),限速 */
+async function syncByOrderSearch({ platform, label, accounts, searchFn, intervalMs = ALI_INTERVAL_MS }) {
+  const rows = listMissing(platform);
   state.total += rows.length;
   if (!rows.length) return;
-  const accounts = config.platformAccounts.ali1688 || [];
   if (!accounts.length) {
     state.failed += rows.length;
-    state.lastError = '未配置 1688 账号';
+    state.lastError = `未配置${label}账号`;
     return;
   }
   let authFailures = 0;
   for (const r of rows) {
     try {
-      const { result } = await searchAliOrder(r.purchase_sn, accounts);
+      const { result } = await searchFn(r.purchase_sn, accounts);
       if (result && Array.isArray(result.goods) && result.goods.length) {
-        if (writeGoods(r.id, '1688', r.purchase_sn, result.sellerName, result.goods)) state.updated += 1;
+        if (writeGoods(r.id, platform, r.purchase_sn, result.sellerName, result.goods)) state.updated += 1;
         else state.notFound += 1;
       } else {
         state.notFound += 1;
@@ -177,24 +178,43 @@ async function syncAli1688() {
       if (/AUTH_REQUIRED|登录|授权|token/i.test(state.lastError)) {
         authFailures += 1;
         if (authFailures >= 3) {
-          state.lastError = `1688 账号登录/token 失效,任务中止:${state.lastError}`;
-          logger.warn({ err: state.lastError }, '[supplier-sync] 1688 中止');
+          state.lastError = `${label} 账号登录失效,任务中止:${state.lastError}`;
+          logger.warn({ err: state.lastError }, `[supplier-sync] ${label} 中止`);
           break;
         }
       }
     }
     state.done += 1;
-    await sleep(ALI_INTERVAL_MS);
+    await sleep(intervalMs);
   }
+}
+
+function syncAli1688() {
+  return syncByOrderSearch({
+    platform: '1688',
+    label: '1688',
+    accounts: config.platformAccounts.ali1688 || [],
+    searchFn: searchAliOrder,
+  });
+}
+
+function syncTaobao() {
+  return syncByOrderSearch({
+    platform: 'taobao',
+    label: '淘宝',
+    accounts: config.platformAccounts.taobao || [],
+    searchFn: searchTaobaoOrder,
+    intervalMs: 2000, // 浏览器 mtop,留足间隔防风控
+  });
 }
 
 /**
  * 启动补齐任务(后台执行,立即返回)
  * @param {{platforms?: string[]}} [opts] 默认先拼多多后 1688
  */
-export function startMissingGoodsSync({ platforms = ['yangkeduo', '1688'] } = {}) {
+export function startMissingGoodsSync({ platforms = ['yangkeduo', '1688', 'taobao'] } = {}) {
   if (state.running) return { started: false, running: true, state: getMissingSyncState() };
-  const list = Array.isArray(platforms) && platforms.length ? platforms : ['yangkeduo', '1688'];
+  const list = Array.isArray(platforms) && platforms.length ? platforms : ['yangkeduo', '1688', 'taobao'];
   state = { ...INITIAL, running: true, startedAt: new Date().toISOString(), platforms: list };
   (async () => {
     try {
@@ -205,6 +225,10 @@ export function startMissingGoodsSync({ platforms = ['yangkeduo', '1688'] } = {}
       if (list.includes('1688')) {
         state.phase = '1688';
         await syncAli1688();
+      }
+      if (list.includes('taobao')) {
+        state.phase = 'taobao';
+        await syncTaobao();
       }
       state.phase = 'backfill';
       state.lastResult = backfillFromHistory();

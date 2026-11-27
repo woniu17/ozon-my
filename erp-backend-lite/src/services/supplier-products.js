@@ -1,5 +1,5 @@
 // 货源商品(2026-11-27)
-// 目标:为每个 Ozon SKU 维护平台货源商品(1688 / 拼多多):平台商品ID(1688 offerId /
+// 目标:为每个 Ozon SKU 维护平台货源商品(1688 / 拼多多 / 淘宝):平台商品ID(1688 offerId /
 // 拼多多 goods_id)、规格SKU(1688)、规格文本、图片、最近采购价/次数、供应商/采购账号。
 //
 // 数据来源:
@@ -66,8 +66,8 @@ export function parseSourceItemId(input) {
   return m ? m[1] : '';
 }
 
-// 支持维护货源的平台(2026-11-27:1688 + 拼多多;淘宝/闲鱼后续按需放开)
-export const SUPPORTED_SOURCE_PLATFORMS = new Set(['1688', 'yangkeduo']);
+// 支持维护货源的平台(2026-11-27:1688 + 拼多多 + 淘宝;闲鱼后续按需放开)
+export const SUPPORTED_SOURCE_PLATFORMS = new Set(['1688', 'yangkeduo', 'taobao']);
 const SOURCE_PLATFORM_ALIASES = { ali1688: '1688', pdd: 'yangkeduo' };
 
 export function normalizeSourcePlatform(p) {
@@ -75,10 +75,11 @@ export function normalizeSourcePlatform(p) {
   return SOURCE_PLATFORM_ALIASES[s] || s;
 }
 
-/** 按链接识别平台(手动新增货源用):拼多多优先,其次 1688 */
+/** 按链接识别平台(手动新增货源用):拼多多/淘宝优先,其次 1688 */
 export function detectSourcePlatform(input, fallback = '1688') {
   const s = String(input || '').toLowerCase();
   if (/yangkeduo|pinduoduo/.test(s)) return 'yangkeduo';
+  if (/taobao|tmall/.test(s)) return 'taobao';
   if (/1688/.test(s)) return '1688';
   return normalizeSourcePlatform(fallback) || '1688';
 }
@@ -631,6 +632,7 @@ export function confirmCandidates(items = []) {
  * 采购次数/最近价按该 SKU 全部历史采购聚合(幂等,可重复执行)。
  */
 export function backfillFromHistory() {
+  const plats = [...SUPPORTED_SOURCE_PLATFORMS];
   const orders = db
     .prepare(
       `SELECT po.id AS po_id, po.platform, po.items_json,
@@ -639,12 +641,12 @@ export function backfillFromHistory() {
        FROM op_purchase_order po
        JOIN op_purchase_link pl ON pl.purchase_order_id = po.id
        JOIN op_ozon_order_item oi ON oi.id = pl.ozon_order_item_id
-       WHERE po.platform IN ('1688', 'yangkeduo')
+       WHERE po.platform IN (${plats.map(() => '?').join(',')})
          AND po.items_json IS NOT NULL AND po.items_json LIKE '%goodsId%'
        GROUP BY po.id
        ORDER BY latest DESC, po.id DESC`
     )
-    .all();
+    .all(...plats);
   const all = collectHistoryCandidates();
   let created = 0;
   let updated = 0;

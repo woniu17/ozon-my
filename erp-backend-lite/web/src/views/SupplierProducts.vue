@@ -50,6 +50,7 @@ const missingSyncText = computed(() => {
   const s = missingSync.state || {};
   const phase = s.phase === 'pdd' ? '拼多多分页拉取'
     : s.phase === '1688' ? '1688 逐单补齐'
+    : s.phase === 'taobao' ? '淘宝逐单补齐'
     : s.phase === 'backfill' ? '回填货源'
     : s.phase === 'done' ? '已完成' : '';
   const parts = [];
@@ -107,7 +108,7 @@ async function pollMissingSync() {
 
 async function doSyncMissingGoods() {
   if (missingSync.running) return;
-  if (!window.confirm('将重拉缺少商品ID的采购单(拼多多分页拉取 + 1688 逐单搜索),\n耗时较长(可能 10~60 分钟),完成后自动回填货源。是否继续?')) return;
+  if (!window.confirm('将重拉缺少商品ID的采购单(拼多多分页拉取 + 1688/淘宝逐单搜索),\n耗时较长(可能 10~60 分钟),完成后自动回填货源。是否继续?')) return;
   try {
     const r = await syncMissingGoods();
     const d = r?.data || r || {};
@@ -427,7 +428,7 @@ onBeforeUnmount(() => stopMissingSyncPoll());
       <div>
         <h2 class="page-title">货源管理</h2>
         <p class="page-desc">
-          维护 Ozon 商品的平台货源(1688 / 拼多多)。采购单保存/补全时自动积累无歧义货源;多商品行订单只生成候选,需人工确认。
+          维护 Ozon 商品的平台货源(1688 / 拼多多 / 淘宝)。采购单保存/补全时自动积累无歧义货源;多商品行订单只生成候选,需人工确认。
         </p>
       </div>
       <div class="header-actions">
@@ -465,6 +466,7 @@ onBeforeUnmount(() => stopMissingSyncPoll());
           <option value="">全部平台</option>
           <option value="1688">1688</option>
           <option value="yangkeduo">拼多多</option>
+          <option value="taobao">淘宝</option>
         </select>
         <input
           v-model="filter.keyword"
@@ -665,11 +667,11 @@ onBeforeUnmount(() => stopMissingSyncPoll());
         <div v-else-if="create.previewErr" class="form-err">{{ create.previewErr }}</div>
 
         <label class="form-row">
-          <span class="form-label">货源商品链接 / ID（1688 / 拼多多） <b class="required">*</b></span>
+          <span class="form-label">货源商品链接 / ID（1688 / 拼多多 / 淘宝） <b class="required">*</b></span>
           <input
             v-model="create.sourceUrl"
             class="form-control"
-            placeholder="https://detail.1688.com/offer/123456789.html 或 https://mobile.yangkeduo.com/goods.html?goods_id=..."
+            placeholder="1688 / 拼多多 / 淘宝 商品链接，或直接填写商品ID"
           />
         </label>
         <label class="form-row">

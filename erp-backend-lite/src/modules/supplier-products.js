@@ -1,5 +1,5 @@
 // 货源管理路由(2026-11-27)
-// 独立「货源管理」页:维护 Ozon SKU 的平台货源商品(1688 / 拼多多)
+// 独立「货源管理」页:维护 Ozon SKU 的平台货源商品(1688 / 拼多多 / 淘宝)
 //   GET    /admin/api/supplier-products/list          货源列表
 //   GET    /admin/api/supplier-products/candidates    待确认候选(SKU 分组)
 //   GET    /admin/api/supplier-products/by-sku/:sku   单 SKU 货源 + 候选
