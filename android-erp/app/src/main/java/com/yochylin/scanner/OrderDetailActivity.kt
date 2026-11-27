@@ -1732,9 +1732,8 @@ class OrderDetailActivity : ComponentActivity() {
                 "pinduoduo://com.xunmeng.pinduoduo/order_detail?order_sn=$testSn",
                 "pinduoduo://order.html?order_sn=$testSn",
                 "pinduoduo://order_detail?order_sn=$testSn",
-                "pinduoduo://goods.html?goods_id=1",
-                "pinduoduo://com.xunmeng.pinduoduo/goods.html?goods_id=897701593039",
-                "pinduoduo://goods.html?goods_id=897701593039",
+                // 商品详情已不走 scheme(pinduoduo:// 商品路径会被路由到首页),
+                // 改由 openSourceProduct 用 https 商品页 + setPackage(com.xunmeng.pinduoduo)
                 "pddopen://",
                 "pdd://",
                 "https://mobile.yangkeduo.com/order.html?order_sn=$testSn",
