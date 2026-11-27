@@ -425,8 +425,21 @@ class PrePurchaseFragment : Fragment() {
         }
     }
 
+    /** 手动签收(2026-11-28):先弹二次确认,避免误触直接签收 */
     private fun manualReceive(row: Row) {
-        confirmReceive(listOf(row.id))
+        val desc = StringBuilder()
+        desc.append(platformLabel(row.platform)).append(" ")
+            .append(row.purchaseSn.ifBlank { "#${row.id}" })
+        if (row.itemSummary.isNotBlank()) desc.append("\n商品:").append(row.itemSummary)
+        desc.append("\n快递:")
+            .append(listOf(row.logisticsCompany, row.logisticsNo).filter { it.isNotBlank() }.joinToString(" ").ifBlank { "—" })
+        desc.append("\n金额:").append(fmtMoney(row.paymentAmount))
+        AlertDialog.Builder(requireContext())
+            .setTitle("预采购确认签收")
+            .setMessage("$desc\n\n确认后该预采购将标记为已签收,是否继续?")
+            .setPositiveButton("确认签收") { _, _ -> confirmReceive(listOf(row.id)) }
+            .setNegativeButton("取消", null)
+            .show()
     }
 
     private var updatingId: Long? = null
