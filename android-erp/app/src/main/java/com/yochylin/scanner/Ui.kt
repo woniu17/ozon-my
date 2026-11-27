@@ -17,6 +17,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.text.InputType
 import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
@@ -379,6 +380,176 @@ fun Context.showPackageMetaEditDialog(
             tagsLabel.visibility = View.GONE
         }
     }
+}
+
+/**
+ * 单输入框编辑对话框(2026-11-28,风格对齐订单处理页「编辑标签/备注」弹窗):
+ * 圆角卡片 + 标题/副标题 + 分区小标签 + 灰色圆角输入框 + 右下取消/保存 + 可选左侧清除。
+ * @param title 标题
+ * @param subtitle 副标题(SKU/说明,可空)
+ * @param label 输入框上方小标签(可空)
+ * @param hint 输入占位
+ * @param initialValue 初始值
+ * @param numeric 数字键盘(重量等)
+ * @param clearLabel 清除按钮文案(null=不显示)
+ * @param validate 保存前校验:返回错误文案则提示并保持弹窗,null 通过
+ * @param onSave 保存回调(入参已去首尾空格)
+ * @param onClear 清除回调
+ */
+fun Context.showSingleInputEditDialog(
+    title: String,
+    subtitle: String? = null,
+    label: String? = null,
+    hint: String = "",
+    initialValue: String? = null,
+    numeric: Boolean = false,
+    clearLabel: String? = "清除",
+    validate: ((String) -> String?)? = null,
+    onSave: (String) -> Unit,
+    onClear: (() -> Unit)? = null,
+) {
+    val density = resources.displayMetrics.density
+    fun dp(v: Int) = (v * density + 0.5f).toInt()
+
+    val input = EditText(this).apply {
+        this.hint = hint
+        textSize = 14f
+        setTextColor(0xFF1D2129.toInt())
+        setHintTextColor(0xFFC9CDD4.toInt())
+        setText(initialValue ?: "")
+        setSingleLine(true)
+        inputType = if (numeric) {
+            InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+        } else {
+            InputType.TYPE_CLASS_TEXT
+        }
+        setPadding(dp(14), dp(10), dp(14), dp(10))
+        background = GradientDrawable().apply {
+            setColor(0xFFF7F8FA.toInt())
+            cornerRadius = dp(10).toFloat()
+            setStroke(dp(1), 0xFFE5E6EB.toInt())
+        }
+    }
+
+    val header = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        addView(TextView(this@showSingleInputEditDialog).apply {
+            text = title
+            textSize = 17f
+            setTextColor(0xFF1D2129.toInt())
+            setTypeface(null, Typeface.BOLD)
+        })
+        if (!subtitle.isNullOrBlank()) {
+            addView(TextView(this@showSingleInputEditDialog).apply {
+                text = subtitle
+                textSize = 12f
+                setTextColor(0xFF86909C.toInt())
+                maxLines = 2
+                ellipsize = TextUtils.TruncateAt.END
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(4) })
+        }
+    }
+
+    val content = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        if (!label.isNullOrBlank()) {
+            addView(TextView(this@showSingleInputEditDialog).apply {
+                text = label
+                textSize = 12f
+                setTextColor(0xFF86909C.toInt())
+            })
+        }
+        addView(input, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = if (label.isNullOrBlank()) 0 else dp(8) })
+    }
+
+    lateinit var dialog: Dialog
+    val cancelBtn = TextView(this).apply {
+        text = "取消"
+        textSize = 14f
+        setTextColor(0xFF4E5969.toInt())
+        setPadding(dp(22), dp(9), dp(22), dp(9))
+        setRoundedBg(0xFFF2F3F5.toInt(), 9f)
+        setOnClickListener { dialog.dismiss() }
+    }
+    val saveBtn = TextView(this).apply {
+        text = "保存"
+        textSize = 14f
+        setTextColor(Color.WHITE)
+        setTypeface(null, Typeface.BOLD)
+        setPadding(dp(26), dp(9), dp(26), dp(9))
+        setRoundedBg(0xFF165DFF.toInt(), 9f)
+        setOnClickListener {
+            val raw = input.text.toString().trim()
+            val err = validate?.invoke(raw)
+            if (err != null) {
+                Toast.makeText(this@showSingleInputEditDialog, err, Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            dialog.dismiss()
+            onSave(raw)
+        }
+    }
+    val btnRow = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        if (!clearLabel.isNullOrBlank() && onClear != null) {
+            addView(TextView(this@showSingleInputEditDialog).apply {
+                text = clearLabel
+                textSize = 13f
+                setTextColor(0xFFD93026.toInt())
+                setPadding(dp(16), dp(8), dp(16), dp(8))
+                setRoundedBg(0xFFFFECE8.toInt(), 9f)
+                setOnClickListener {
+                    dialog.dismiss()
+                    onClear()
+                }
+            })
+        }
+        addView(View(this@showSingleInputEditDialog), LinearLayout.LayoutParams(0, 1, 1f))
+        addView(cancelBtn)
+        addView(saveBtn, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { leftMargin = dp(10) })
+    }
+
+    val root = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(20), dp(20), dp(20), dp(20))
+        addView(header)
+        addView(content, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(16) })
+        addView(btnRow, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(16) })
+    }
+
+    dialog = Dialog(this)
+    dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+    dialog.setContentView(root)
+    dialog.setCanceledOnTouchOutside(true)
+    dialog.window?.apply {
+        setBackgroundDrawable(GradientDrawable().apply {
+            setColor(Color.WHITE)
+            cornerRadius = dp(16).toFloat()
+        })
+        setLayout((resources.displayMetrics.widthPixels * 0.90).toInt(), WindowManager.LayoutParams.WRAP_CONTENT)
+        setSoftInputMode(
+            WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN
+                    or WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+        )
+    }
+    dialog.show()
+    input.requestFocus()
 }
 
 /**

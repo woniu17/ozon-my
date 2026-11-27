@@ -732,27 +732,27 @@ class OrderDetailActivity : ComponentActivity() {
             toast("该商品无 SKU,无法维护重量")
             return
         }
-        val input = EditText(this).apply {
-            hint = "重量(g),留空清除"
-            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            setText(item.customWeightG?.let { fmtNum(it) } ?: "")
-        }
-        AlertDialog.Builder(this)
-            .setTitle("设置本系统重量")
-            .setMessage("SKU $sku\n" + (item.ozonWeightG?.let { "Ozon 后台重量 ${fmtNum(it)}g" } ?: "无 Ozon 后台重量"))
-            .setView(input)
-            .setPositiveButton("保存") { _, _ ->
-                val raw = input.text.toString().trim()
-                val g = if (raw.isEmpty()) null else raw.toDoubleOrNull()
-                if (raw.isNotEmpty() && (g == null || g < 0)) {
-                    toast("重量必须为非负数字")
-                    return@setPositiveButton
+        val subtitle = "SKU $sku\n" + (item.ozonWeightG?.let { "Ozon 后台重量 ${fmtNum(it)}g" } ?: "无 Ozon 后台重量")
+        showSingleInputEditDialog(
+            title = "设置本系统重量",
+            subtitle = subtitle,
+            label = "重量(克)",
+            hint = "留空清除",
+            initialValue = item.customWeightG?.let { fmtNum(it) } ?: "",
+            numeric = true,
+            validate = { raw ->
+                if (raw.isEmpty()) null
+                else {
+                    val g = raw.toDoubleOrNull()
+                    if (g == null || g < 0) "重量必须为非负数字" else null
                 }
+            },
+            onSave = { raw ->
+                val g = if (raw.isEmpty()) null else raw.toDoubleOrNull()
                 setSkuWeight(item, g)
-            }
-            .setNeutralButton("清除") { _, _ -> setSkuWeight(item, null) }
-            .setNegativeButton("取消", null)
-            .show()
+            },
+            onClear = { setSkuWeight(item, null) },
+        )
     }
 
     private fun setSkuWeight(item: com.yochylin.scanner.model.PkgItem, weightG: Double?) {
@@ -784,21 +784,15 @@ class OrderDetailActivity : ComponentActivity() {
             toast("该商品无 SKU,无法维护别名")
             return
         }
-        val input = EditText(this).apply {
-            hint = "商品别名,留空清除"
-            inputType = InputType.TYPE_CLASS_TEXT
-            setText(item.customAlias ?: "")
-        }
-        AlertDialog.Builder(this)
-            .setTitle("设置商品别名")
-            .setMessage("SKU $sku\n别名用于新订单通知与列表展示")
-            .setView(input)
-            .setPositiveButton("保存") { _, _ ->
-                setSkuAlias(item, input.text.toString().trim().ifBlank { null })
-            }
-            .setNeutralButton("清除") { _, _ -> setSkuAlias(item, null) }
-            .setNegativeButton("取消", null)
-            .show()
+        showSingleInputEditDialog(
+            title = "设置商品别名",
+            subtitle = "SKU $sku\n别名用于新订单通知与列表展示",
+            label = "商品别名",
+            hint = "留空清除",
+            initialValue = item.customAlias ?: "",
+            onSave = { raw -> setSkuAlias(item, raw.ifBlank { null }) },
+            onClear = { setSkuAlias(item, null) },
+        )
     }
 
     private fun setSkuAlias(item: com.yochylin.scanner.model.PkgItem, alias: String?) {
