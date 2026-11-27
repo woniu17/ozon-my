@@ -118,6 +118,36 @@
             android:textColor="#FFFFFF"
             android:textSize="14sp"
             android:visibility="gone" />
+
+        <!-- 扫码结果(2026-11-28):视频区底部显示快递单号 + 对应货件单号,扫到后保留 15 秒 -->
+        <LinearLayout
+            android:id="@+id/scanCodeOverlay"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|center_horizontal"
+            android:layout_marginBottom="16dp"
+            android:orientation="vertical"
+            android:gravity="center_horizontal"
+            android:paddingHorizontal="16dp"
+            android:paddingVertical="8dp"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/scanCodeCourier"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="#FFFFFF"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/scanCodePosting"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:textColor="#FFE58F"
+                android:textSize="13sp" />
+        </LinearLayout>
     </FrameLayout>
 
     <!-- 提示条 -->

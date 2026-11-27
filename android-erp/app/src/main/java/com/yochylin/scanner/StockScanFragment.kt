@@ -77,6 +77,10 @@ class StockScanFragment : Fragment() {
     private lateinit var previewView: PreviewView
     private lateinit var startOverlay: TextView
     private lateinit var hintOverlay: TextView
+    private lateinit var codeOverlay: LinearLayout
+    private lateinit var codeCourierTv: TextView
+    private lateinit var codePostingTv: TextView
+    private var codeOverlayHideRunnable: Runnable? = null
     private lateinit var statsText: TextView
     private lateinit var torchBtn: TextView
     private lateinit var pauseBtn: TextView
@@ -205,6 +209,10 @@ class StockScanFragment : Fragment() {
         recordList = view.findViewById(R.id.recordList)
         startOverlay = view.findViewById(R.id.startOverlay)
         hintOverlay = view.findViewById(R.id.scanHint)
+        codeOverlay = view.findViewById(R.id.scanCodeOverlay)
+        codeCourierTv = view.findViewById(R.id.scanCodeCourier)
+        codePostingTv = view.findViewById(R.id.scanCodePosting)
+        codeOverlay.setRoundedBg(0x99000000.toInt(), 10f)
 
         view.findViewById<TextView>(R.id.manualBtn).setOnClickListener { showManualInput() }
         view.findViewById<TextView>(R.id.clearBtn).setOnClickListener { clearRecords() }
@@ -341,6 +349,7 @@ class StockScanFragment : Fragment() {
             return
         }
         reportLog("scan_search_start", "全局搜索订单", code = code)
+        showCodeOverlay(code, null) // 视频区先显示快递单号,查询到后补货件单号
         // 2026-11-16:扫到预采购快递单号时弹二次确认签收(并行,不阻断原入库主流程)
         checkPrePurchaseReceive(code)
         viewLifecycleOwner.lifecycleScope.launch {
@@ -370,10 +379,12 @@ class StockScanFragment : Fragment() {
                 if (pendingPkgs.isNotEmpty()) {
                     // 多个待入库订单(同一采购单拆成多单):弹窗列出全部,确认后批量入库
                     if (pendingPkgs.size > 1) {
+                        showCodeOverlay(code, formatPostingList(pendingPkgs.map { it.postingNumber }))
                         showMultiPackageConfirm(pendingPkgs, code)
                         return@launch
                     }
                     val stockPkg = pendingPkgs[0]
+                    showCodeOverlay(code, stockPkg.postingNumber)
                     val totalQty = (stockPkg.items?.sumOf { it.quantity ?: 0.0 } ?: 0.0).toLong()
                     // 订单商品首图(入库记录展示,取第一个商品图片)
                     val imageUrl = stockPkg.items?.firstOrNull()?.picUrl
@@ -386,6 +397,7 @@ class StockScanFragment : Fragment() {
                 }
                 if (hitPkgs.isEmpty()) {
                     // 未命中订单:只在视频区提示,不进记录列表
+                    showCodeOverlay(code, "未找到对应货件")
                     showScanHint("❌ 未找到订单:$code", error = true)
                     playFeedback(false)
                     reportLog("scan_not_found", "未找到订单", code = code, result = "failed")
@@ -397,6 +409,7 @@ class StockScanFragment : Fragment() {
                 }
                 if (stocked != null) {
                     val pn = stocked.postingNumber ?: ""
+                    showCodeOverlay(code, pn.ifBlank { "—" })
                     showScanHint("✅ 该订单已入库:${pn.ifBlank { code }}", error = false)
                     playFeedback(true)
                     reportLog(
@@ -416,6 +429,7 @@ class StockScanFragment : Fragment() {
                 val hit = hitPkgs.first()
                 val status = hit.operateStatus ?: hit.ozonStatus.orEmpty()
                 val pn = hit.postingNumber ?: ""
+                showCodeOverlay(code, pn.ifBlank { "—" })
                 showScanHint(
                     "⏭ 订单状态[${status.ifBlank { "未知" }}]不可入库:${pn.ifBlank { code }}",
                     error = false
@@ -429,6 +443,7 @@ class StockScanFragment : Fragment() {
                 )
             } catch (e: Exception) {
                 failCount++
+                showCodeOverlay(code, "查询失败")
                 addRecord(RecordEntry(RecordStatus.FAILED, code, message = "查询失败:${e.message ?: e.javaClass.simpleName}"))
                 playFeedback(false)
                 reportLog("scan_search_failed", "查询失败:${e.message ?: e.javaClass.simpleName}", code = code, result = "failed")
@@ -490,6 +505,28 @@ class StockScanFragment : Fragment() {
     }
 
     /** 视频区临时提示:2 秒后自动消失,用于非快递单号/未找到订单等不写记录列表的场景 */
+    /** 视频区扫码结果(2026-11-28):显示快递单号 + 对应货件单号,15 秒后自动隐藏
+     *  posting 为 null 表示正在识别;多货件时传入汇总文案。
+     */
+    private fun showCodeOverlay(code: String, posting: String?) {
+        if (view == null) return
+        codeCourierTv.text = "快递单号:$code"
+        codePostingTv.text = "货件单号:${posting ?: "识别中…"}"
+        codeOverlay.visibility = View.VISIBLE
+        codeOverlayHideRunnable?.let { mainHandler.removeCallbacks(it) }
+        val r = Runnable { codeOverlay.visibility = View.GONE }
+        codeOverlayHideRunnable = r
+        mainHandler.postDelayed(r, 15000)
+    }
+
+    /** 多个货件号汇总:最多显示 3 个,其余以"等N个"折叠 */
+    private fun formatPostingList(list: List<String?>): String {
+        val arr = list.mapNotNull { it?.trim()?.takeIf { v -> v.isNotBlank() } }.distinct()
+        if (arr.isEmpty()) return "—"
+        return if (arr.size <= 3) arr.joinToString(" / ")
+        else arr.take(3).joinToString(" / ") + " 等${arr.size}个"
+    }
+
     private fun showScanHint(text: String, error: Boolean) {
         if (view == null) return
         hintOverlay.text = text
@@ -608,6 +645,7 @@ class StockScanFragment : Fragment() {
             return
         }
         reportLog("ship_submit", "提交入库", code = code, packageId = packageId, postingNumber = postingNumber, storeId = storeId, result = "pending")
+        showCodeOverlay(code, postingNumber)
         // 有 pendingRec(多件确认/重试)时原地更新为"入库中",否则新增一条"入库中"记录
         val rec = pendingRec ?: RecordEntry(
             RecordStatus.PENDING, code, packageId, postingNumber,
