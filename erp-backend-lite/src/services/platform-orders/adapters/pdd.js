@@ -324,6 +324,66 @@ async function listPddOrders({ tab = 'all', size = 30, account } = {}) {
   });
 }
 
+/** 分页拉取订单(2026-11-27,货源商品ID补齐用)
+ *  order_list_v4 支持 offset 游标翻页;命中全部目标单号或翻完即结束,避免逐单搜索。
+ *  @param {{account:string, orderSns?:string[], maxPages?:number, size?:number, intervalMs?:number,
+ *           onPage?:function({pages:number, scanned:number, found:number}):void}} p
+ *  @returns {Promise<{orders:Array, pages:number, exhausted:boolean}>} */
+async function fetchPddOrdersPaged({
+  account,
+  orderSns = null,
+  maxPages = 300,
+  size = 50,
+  intervalMs = 2000,
+  onPage = null,
+} = {}) {
+  return withPage(account, 'pdd', PDD_ENTRY, PDD_ORIGIN, async (page) => {
+    const cached = pddIdentityCache.get(account);
+    const pdduid = (cached && cached.userId) || (await getPdduid(page));
+    const url = pdduid ? `${PDD_API}?pdduid=${encodeURIComponent(pdduid)}` : PDD_API;
+    const wanted = Array.isArray(orderSns) ? new Set(orderSns) : null;
+    const pageSize = Math.min(Number(size) || 50, 50);
+    const found = new Map();
+    let offset = '';
+    let pages = 0;
+    let scanned = 0;
+    for (let i = 0; i < maxPages; i += 1) {
+      const body = {
+        type: 'all',
+        page: 1,
+        origin_host_name: 'mobile.yangkeduo.com',
+        scene: 'order_list_h5',
+        page_from: 0,
+        front_env: 1,
+        pay_front_supports: [],
+        size: pageSize,
+        offset,
+      };
+      const r = await fetchInPage(page, url, body);
+      const data = mapResponse(r, 'PDD');
+      const raw = Array.isArray(data.orders) ? data.orders : [];
+      pages += 1;
+      if (!raw.length) {
+        if (onPage) onPage({ pages, scanned, found: found.size });
+        return { orders: [...found.values()], pages, exhausted: true };
+      }
+      scanned += raw.length;
+      const normalized = normalizeOrders({ orders: raw });
+      for (const o of normalized) {
+        if (!wanted || wanted.has(o.orderSn)) found.set(o.orderSn, { ...o, account });
+      }
+      if (onPage) onPage({ pages, scanned, found: found.size });
+      if (wanted && found.size >= wanted.size) break;
+      const last = raw[raw.length - 1];
+      const next = last && last.offset;
+      if (!next || raw.length < pageSize) return { orders: [...found.values()], pages, exhausted: true };
+      offset = String(next);
+      if (intervalMs > 0) await new Promise((res) => setTimeout(res, intervalMs));
+    }
+    return { orders: [...found.values()], pages, exhausted: false };
+  });
+}
+
 /** 按订单号精确搜索(补全商品图/数量);未找到返回 { result: null }
  *  多账号(2026-09-13):逐账号尝试,命中即返回;登录失效/风控不中断(记录后试下一账号),
  *  全部账号登录态失败才抛 AUTH_REQUIRED;账号正常但无命中 → { result: null } */
@@ -485,5 +545,5 @@ async function fetchPddOrderPackages(orderSn, trackingNumber, account) {
   });
 }
 
-export { listPddOrders, searchPddOrder, getPddTrace, fetchPddOrderDetail, fetchPddOrderPromotions, fetchPddOrderPackages };
+export { listPddOrders, fetchPddOrdersPaged, searchPddOrder, getPddTrace, fetchPddOrderDetail, fetchPddOrderPromotions, fetchPddOrderPackages };
 

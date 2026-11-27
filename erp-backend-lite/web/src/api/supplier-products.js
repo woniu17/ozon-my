@@ -45,3 +45,13 @@ export function confirmSupplierCandidates(items) {
 export function backfillSupplierProducts() {
   return request.post('/admin/api/supplier-products/backfill', {});
 }
+
+/** 补齐缺失货源商品ID(后台任务) */
+export function syncMissingGoods(platforms) {
+  return request.post('/admin/api/supplier-products/sync-missing-goods', platforms ? { platforms } : {});
+}
+
+/** 补齐任务进度 */
+export function getMissingGoodsSyncStatus() {
+  return request.get('/admin/api/supplier-products/sync-missing-goods-status');
+}

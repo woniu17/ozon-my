@@ -9,6 +9,8 @@
 //   POST   /admin/api/supplier-products/set-primary/:id 设为常用
 //   POST   /admin/api/supplier-products/confirm       批量确认候选
 //   POST   /admin/api/supplier-products/backfill      历史采购回填(仅无歧义单)
+//   POST   /admin/api/supplier-products/sync-missing-goods        补齐缺失商品ID(后台任务)
+//   GET    /admin/api/supplier-products/sync-missing-goods-status 任务进度
 import { Router } from 'express';
 import { ok } from '../utils/response.js';
 import { ApiError, ErrorCode } from '../utils/error-codes.js';
@@ -28,6 +30,7 @@ import {
   detectSourcePlatform,
   normalizeSourcePlatform,
 } from '../services/supplier-products.js';
+import { startMissingGoodsSync, getMissingSyncState } from '../services/supplier-source-sync.js';
 
 const router = Router();
 
@@ -118,6 +121,24 @@ router.post('/admin/api/supplier-products/backfill', (req, res, next) => {
     const result = backfillFromHistory();
     logger.info(result, '[supplier-products] 历史采购回填完成');
     res.json(ok(result));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// 补齐缺失货源商品ID(2026-11-27):后台任务,重拉采购单商品行后自动积累货源
+router.post('/admin/api/supplier-products/sync-missing-goods', (req, res, next) => {
+  try {
+    const platforms = Array.isArray(req.body?.platforms) ? req.body.platforms : undefined;
+    res.json(ok(startMissingGoodsSync({ platforms })));
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.get('/admin/api/supplier-products/sync-missing-goods-status', (_req, res, next) => {
+  try {
+    res.json(ok(getMissingSyncState()));
   } catch (e) {
     next(e);
   }

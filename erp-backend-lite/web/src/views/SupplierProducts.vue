@@ -3,7 +3,7 @@
 // - 货源列表:已确认的货源(常用/备选),展示最近采购价/次数/供应商,可编辑规格/配比/备注
 // - 待确认候选:由历史采购单(采购单↔Ozon SKU 关联)自动生成;多商品行订单只给候选,人工确认
 // - 从历史采购回填:仅处理「单商品行 + 单 SKU」的无歧义采购单,可重复执行
-import { ref, reactive, computed, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 import AppModal from '../components/AppModal.vue';
 import AppPager from '../components/AppPager.vue';
 import { useToast } from '../components/useToast.js';
@@ -18,6 +18,8 @@ import {
   setSupplierPrimary,
   confirmSupplierCandidates,
   backfillSupplierProducts,
+  syncMissingGoods,
+  getMissingGoodsSyncStatus,
 } from '../api/supplier-products.js';
 
 const { show } = useToast();
@@ -41,6 +43,84 @@ const candidatesPage = ref(1);
 const selectedKeys = ref([]);
 
 const backfilling = ref(false);
+
+// 补齐缺失商品ID(后台任务,进度轮询)
+const missingSync = reactive({ running: false, state: {}, timer: null });
+const missingSyncText = computed(() => {
+  const s = missingSync.state || {};
+  const phase = s.phase === 'pdd' ? '拼多多分页拉取'
+    : s.phase === '1688' ? '1688 逐单补齐'
+    : s.phase === 'backfill' ? '回填货源'
+    : s.phase === 'done' ? '已完成' : '';
+  const parts = [];
+  if (phase) parts.push(phase);
+  if (s.phase === 'pdd') {
+    parts.push(`第 ${s.page || 0} 页`);
+    parts.push(`已扫 ${s.scanned || 0} 单`);
+    parts.push(`命中 ${s.found || 0}`);
+  }
+  if (s.done || s.total) parts.push(`已处理 ${s.done || 0}/${s.total || 0}`);
+  if (s.updated) parts.push(`成功 ${s.updated}`);
+  if (s.notFound) parts.push(`未找到 ${s.notFound}`);
+  if (s.failed) parts.push(`失败 ${s.failed}`);
+  return parts.join(' · ');
+});
+
+async function fetchMissingSyncStatus() {
+  try {
+    const r = await getMissingGoodsSyncStatus();
+    const d = r?.data || r || {};
+    missingSync.state = d;
+    missingSync.running = !!d.running;
+    if (d.running) startMissingSyncPoll();
+    else stopMissingSyncPoll();
+  } catch { /* 忽略 */ }
+}
+
+function startMissingSyncPoll() {
+  if (missingSync.timer) return;
+  missingSync.timer = setInterval(pollMissingSync, 5000);
+}
+
+function stopMissingSyncPoll() {
+  if (missingSync.timer) {
+    clearInterval(missingSync.timer);
+    missingSync.timer = null;
+  }
+}
+
+async function pollMissingSync() {
+  const wasRunning = missingSync.running;
+  await fetchMissingSyncStatus();
+  if (wasRunning && !missingSync.running) {
+    const s = missingSync.state || {};
+    const rr = s.lastResult || {};
+    show(
+      `补齐完成:成功 ${s.updated || 0} 单,未找到 ${s.notFound || 0},失败 ${s.failed || 0}` +
+        (rr.created != null ? `;货源回填新建 ${rr.created}、更新 ${rr.updated}` : ''),
+      s.failed ? 'error' : 'success'
+    );
+    await Promise.all([loadSources(), loadCandidates()]);
+    await refreshCounts();
+  }
+}
+
+async function doSyncMissingGoods() {
+  if (missingSync.running) return;
+  if (!window.confirm('将重拉缺少商品ID的采购单(拼多多分页拉取 + 1688 逐单搜索),\n耗时较长(可能 10~60 分钟),完成后自动回填货源。是否继续?')) return;
+  try {
+    const r = await syncMissingGoods();
+    const d = r?.data || r || {};
+    if (d.started === false) {
+      show('已有补齐任务在运行', 'error');
+    } else {
+      show('补齐任务已启动,可离开页面(进度会保留)', 'success');
+    }
+    await fetchMissingSyncStatus();
+  } catch (e) {
+    show(e.message || String(e), 'error');
+  }
+}
 
 const storeOptions = computed(() => storesStore.list || []);
 function storeName(id) {
@@ -335,7 +415,10 @@ onMounted(async () => {
   storesStore.load();
   await loadSources();
   await refreshCounts();
+  await fetchMissingSyncStatus();
 });
+
+onBeforeUnmount(() => stopMissingSyncPoll());
 </script>
 
 <template>
@@ -351,8 +434,17 @@ onMounted(async () => {
         <button class="btn btn-ghost" :disabled="backfilling" @click="doBackfill">
           {{ backfilling ? '回填中…' : '从历史采购回填' }}
         </button>
+        <button class="btn btn-ghost" :disabled="missingSync.running" @click="doSyncMissingGoods">
+          {{ missingSync.running ? '补齐中…' : '补齐缺失商品ID' }}
+        </button>
         <button class="btn btn-primary" @click="openCreate">新增货源</button>
       </div>
+    </div>
+
+    <div v-if="missingSync.running" class="sync-banner">
+      <span class="sync-title">补齐缺失商品ID</span>
+      <span>{{ missingSyncText }}</span>
+      <span v-if="missingSync.state?.lastError" class="sync-err">{{ missingSync.state.lastError }}</span>
     </div>
 
     <div class="toolbar">
@@ -648,6 +740,9 @@ onMounted(async () => {
 .page-title { margin: 0; font-size: 20px; }
 .page-desc { margin: 4px 0 0; color: #86909c; font-size: 13px; max-width: 760px; }
 .header-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.sync-banner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: #fff7e6; color: #d97706; border: 1px solid #ffe7ba; border-radius: 6px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
+.sync-title { font-weight: 600; }
+.sync-err { color: #f53f3f; font-size: 12px; }
 .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
 .tabs { display: flex; gap: 8px; }
 .tab-btn { border: 1px solid #e5e6eb; background: #fff; border-radius: 6px; padding: 6px 14px; cursor: pointer; font-size: 13px; color: #4e5969; }
