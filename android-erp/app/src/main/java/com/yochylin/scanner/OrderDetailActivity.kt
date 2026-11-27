@@ -495,6 +495,19 @@ class OrderDetailActivity : ComponentActivity() {
      *  候选 scheme 依次尝试(能解析才拉起),全部失败回退浏览器打开货源链接。
      */
     private fun openSourceProduct(sp: SupplierProduct) {
+        val platform = sp.platform?.lowercase()
+        val itemId = sp.sourceItemId?.trim().orEmpty()
+        // 拼多多(2026-11-27 实测 APP 8.33.1):pinduoduo:// 商品路径会被路由到首页,
+        // 改用 https 商品页并显式指定包名,APP 内部直接渲染商品详情;失败再回退浏览器。
+        if (platform in setOf("pdd", "yangkeduo", "拼多多") && itemId.isNotBlank()) {
+            val goodsUrl = "https://mobile.yangkeduo.com/goods.html?goods_id=$itemId"
+            val appIntent = Intent(Intent.ACTION_VIEW, Uri.parse(goodsUrl))
+                .setPackage("com.xunmeng.pinduoduo")
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (runCatching { startActivity(appIntent) }.isSuccess) return
+            openSourceUrl(goodsUrl)
+            return
+        }
         val (schemes, web) = sourceProductDeepLinks(sp.platform, sp.sourceItemId, sp.sourceUrl)
         for (scheme in schemes) {
             val appIntent = Intent(Intent.ACTION_VIEW, Uri.parse(scheme)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -506,8 +519,7 @@ class OrderDetailActivity : ComponentActivity() {
     }
 
     /**
-     * 平台 → 商品详情候选 deep link 列表 + 浏览器兜底 URL
-     * - 拼多多: pinduoduo://com.xunmeng.pinduoduo/goods.html?goods_id=
+     * 平台 → 商品详情候选 deep link 列表 + 浏览器兜底 URL(拼多多已在 openSourceProduct 单独处理)
      * - 1688: wireless1688 plugin 包装(与订单拉起同款) → https 换 scheme 两种写法
      * - 淘宝: dps:// (分享协议) → tbopen:// → taobao://item
      * - 闲鱼: fleamarket://item?id= (官方唤端格式)
@@ -525,10 +537,6 @@ class OrderDetailActivity : ComponentActivity() {
                     "wireless1688://detail.1688.com/offer/$id.html"
                 ) to "https://detail.1688.com/offer/$id.html"
             }
-            "pdd", "yangkeduo", "拼多多" -> listOf(
-                "pinduoduo://com.xunmeng.pinduoduo/goods.html?goods_id=$id",
-                "pinduoduo://goods.html?goods_id=$id"
-            ) to "https://mobile.yangkeduo.com/goods.html?goods_id=$id"
             "taobao", "淘宝", "tmall", "天猫" -> {
                 val itemUrl = "https://item.taobao.com/item.htm?id=$id"
                 listOf(
