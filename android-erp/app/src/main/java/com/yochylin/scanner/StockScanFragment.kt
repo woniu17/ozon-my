@@ -108,16 +108,9 @@ class StockScanFragment : Fragment() {
         "wait_stick", "wait_dispatch", "dispatching", "delivering", "signed"
     )
 
-    /** 已入库/在途 Ozon 状态(2026-11-08):视频区提示"已入库",不重复入库 */
-    private val STOCKED_OZON_STATUSES = setOf(
-        "awaiting_registration", "awaiting_deliver",
-        "driver_pickup", "delivering", "delivered"
-    )
-
-    /** 可入库 Ozon 状态(2026-11-08):本地 wait_stock 时纳入入库流程(已入库态由后端幂等返回) */
-    private val SHIPPABLE_OZON_STATUSES = setOf(
-        "awaiting_packaging", "awaiting_registration", "awaiting_deliver"
-    )
+    /** 不可入库的 Ozon 终态(2026-11-28):取消/未受理,扫到时提示状态不可入库;
+     *  其余状态本 wait_stock 单一律走入库接口,由后端实时校准(已入库/在途会推进本地) */
+    private val UNSHIPPABLE_OZON_STATUSES = setOf("cancelled", "not_accepted")
 
     private var paused = true
     private var torchOn = false
@@ -367,14 +360,15 @@ class StockScanFragment : Fragment() {
                 val resp = Api.parse<PackageListResponse>(data)
                 // 2026-11-08:同一采购快递单号可关联多个待入库订单,收集全部待入库订单
                 // (而非只取第一个),多个时弹窗确认后一次性全部入库,避免漏入。
-                // 2026-11-03:awaiting_registration/awaiting_deliver 已在 Ozon 后台流转,后端幂等返回已入库并推进本地,同样纳入待入库扫描
                 // 2026-11-08(用户反馈):已入库订单(本地已推进到待打单及之后)只在视频区提示"已入库",
                 // 不再报错、不增加记录;正在入库中的重复扫描用提示音提醒。
+                // 2026-11-28(修复:扫描提示已入库但列表仍待入库):本地 wait_stock 时不再预判 Ozon 缓存状态,
+                // 一律走入库接口,由后端实时查询 Ozon 并在已入库/在途时推进本地状态。
                 val hitPkgs = resp.packages.filter { it.id.isNotEmpty() }
-                // 待入库订单:本地 wait_stock(已采购待入库) + Ozon 可入库/已入库态(后端幂等)
+                // 待入库订单:本地 wait_stock,排除 Ozon 取消/未受理终态
                 val pendingPkgs = hitPkgs.filter {
                     it.operateStatus == "wait_stock"
-                        && it.ozonStatus in SHIPPABLE_OZON_STATUSES
+                        && it.ozonStatus !in UNSHIPPABLE_OZON_STATUSES
                 }
                 if (pendingPkgs.isNotEmpty()) {
                     // 多个待入库订单(同一采购单拆成多单):弹窗列出全部,确认后批量入库
@@ -403,10 +397,8 @@ class StockScanFragment : Fragment() {
                     reportLog("scan_not_found", "未找到订单", code = code, result = "failed")
                     return@launch
                 }
-                // 已入库(本地已推进到待打单及之后,或 Ozon 已入库/在途):只在视频区提示,不重复入库、不写记录
-                val stocked = hitPkgs.firstOrNull {
-                    it.operateStatus in STOCKED_LOCAL_STATUSES || it.ozonStatus in STOCKED_OZON_STATUSES
-                }
+                // 已入库(本地已推进到待打单及之后):只在视频区提示,不重复入库、不写记录
+                val stocked = hitPkgs.firstOrNull { it.operateStatus in STOCKED_LOCAL_STATUSES }
                 if (stocked != null) {
                     val pn = stocked.postingNumber ?: ""
                     showCodeOverlay(code, pn.ifBlank { "—" })

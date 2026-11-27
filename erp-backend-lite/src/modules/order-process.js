@@ -1943,12 +1943,18 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
     const g1 = await postingFbsGet(store, row.postingNumber);
     const p1 = g1?.result;
     const ozonStatus = p1?.status || '';
-    // 已入库态:幂等返回(不再调 ship)
-    if (ozonStatus === 'awaiting_registration' || ozonStatus === 'awaiting_deliver') {
+    // 已入库/已进入后续流转:本地 wait_stock 时推进本地状态(2026-11-28 修复:
+    // 扫描入库提示已入库但扫描打单仍待入库——缓存状态与本地状态不一致时由这里兜底校准)
+    const POST_STOCK_STATUSES = new Set([
+      'awaiting_registration', 'awaiting_deliver', 'delivering', 'driver_pickup', 'delivered',
+    ]);
+    if (POST_STOCK_STATUSES.has(ozonStatus)) {
       orderPackageDao.syncPosting(store.id, p1); // 顺带校准本地状态
       markStocked(packageId); // 本地推进:待入库 → 待打单
       // 2026-11-10:状态已入库,后台预取面单 PDF/条码(扫描打单加速,fire-and-forget)
-      fireAndForgetBarcodePrefetch(row.storeId, row.postingNumber);
+      if (ozonStatus === 'awaiting_registration' || ozonStatus === 'awaiting_deliver') {
+        fireAndForgetBarcodePrefetch(row.storeId, row.postingNumber);
+      }
       logOrderAction({
         packageId, postingNumber: row.postingNumber, storeId: row.storeId,
         action: 'ship',
