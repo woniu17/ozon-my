@@ -1,5 +1,5 @@
 // 货源管理路由(2026-11-27)
-// 独立「货源管理」页:维护 Ozon SKU 的平台货源商品(1688 优先)
+// 独立「货源管理」页:维护 Ozon SKU 的平台货源商品(1688 / 拼多多)
 //   GET    /admin/api/supplier-products/list          货源列表
 //   GET    /admin/api/supplier-products/candidates    待确认候选(SKU 分组)
 //   GET    /admin/api/supplier-products/by-sku/:sku   单 SKU 货源 + 候选
@@ -25,14 +25,16 @@ import {
   backfillFromHistory,
   parseSourceItemId,
   buildSourceUrl,
+  detectSourcePlatform,
+  normalizeSourcePlatform,
 } from '../services/supplier-products.js';
 
 const router = Router();
 
 router.get('/admin/api/supplier-products/list', (req, res, next) => {
   try {
-    const { storeId = '', keyword = '', page = 1, pageSize = 20 } = req.query;
-    res.json(ok(listSources({ storeId, keyword, page, pageSize })));
+    const { storeId = '', platform = '', keyword = '', page = 1, pageSize = 20 } = req.query;
+    res.json(ok(listSources({ storeId, platform, keyword, page, pageSize })));
   } catch (e) {
     next(e);
   }
@@ -40,8 +42,8 @@ router.get('/admin/api/supplier-products/list', (req, res, next) => {
 
 router.get('/admin/api/supplier-products/candidates', (req, res, next) => {
   try {
-    const { storeId = '', keyword = '', page = 1, pageSize = 20 } = req.query;
-    res.json(ok(listCandidates({ storeId, keyword, page, pageSize })));
+    const { storeId = '', keyword = '', platform = '', page = 1, pageSize = 20 } = req.query;
+    res.json(ok(listCandidates({ storeId, keyword, platform, page, pageSize })));
   } catch (e) {
     next(e);
   }
@@ -58,13 +60,18 @@ router.get('/admin/api/supplier-products/by-sku/:sku', (req, res, next) => {
 router.post('/admin/api/supplier-products/create', (req, res, next) => {
   try {
     const b = req.body || {};
+    // 平台:显式传 platform 优先,否则按链接识别(1688 / 拼多多)
+    const platform = b.platform
+      ? normalizeSourcePlatform(b.platform)
+      : detectSourcePlatform(b.sourceUrl || b.sourceItemId || '', '1688');
     // 允许直接提交链接:sourceUrl → 解析商品ID
     const sourceItemId = String(b.sourceItemId || '').trim() || parseSourceItemId(b.sourceUrl);
-    if (!sourceItemId) throw new ApiError(ErrorCode.VALIDATION_ERROR, '请填写 1688 商品链接或商品ID');
+    if (!sourceItemId) throw new ApiError(ErrorCode.VALIDATION_ERROR, '请填写货源商品链接或商品ID(1688/拼多多)');
     const r = upsertSource({
       ...b,
+      platform,
       sourceItemId,
-      sourceUrl: b.sourceUrl || buildSourceUrl(b.platform || '1688', sourceItemId),
+      sourceUrl: b.sourceUrl || buildSourceUrl(platform, sourceItemId),
     });
     res.json(ok(r));
   } catch (e) {

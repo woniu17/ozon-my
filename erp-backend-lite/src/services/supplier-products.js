@@ -1,6 +1,6 @@
 // 货源商品(2026-11-27)
-// 目标:为每个 Ozon SKU 维护平台货源商品(1688 优先):1688 商品ID(offerId)、规格SKU、
-// 规格文本、图片、最近采购价/次数、供应商/采购账号。
+// 目标:为每个 Ozon SKU 维护平台货源商品(1688 / 拼多多):平台商品ID(1688 offerId /
+// 拼多多 goods_id)、规格SKU(1688)、规格文本、图片、最近采购价/次数、供应商/采购账号。
 //
 // 数据来源:
 //   1) 采购订单 op_purchase_order.items_json(平台订单导入/补全时写入 goodsId/skuId/spec/price/thumbUrl)
@@ -56,12 +56,37 @@ export function buildSourceUrl(platform, itemId) {
   }
 }
 
-/** 从 1688 链接/纯 ID 中提取商品 ID(offerId) */
+/** 从 1688/拼多多 链接或纯 ID 中提取商品 ID */
 export function parseSourceItemId(input) {
   const s = String(input || '').trim();
   if (!s) return '';
-  const m = /offer\/(\d{6,})/i.exec(s) || /(\d{6,})/.exec(s);
+  const m = /offer\/(\d{6,})/i.exec(s)
+    || /goods_id=(\d{6,})/i.exec(s)
+    || /(\d{6,})/.exec(s);
   return m ? m[1] : '';
+}
+
+// 支持维护货源的平台(2026-11-27:1688 + 拼多多;淘宝/闲鱼后续按需放开)
+export const SUPPORTED_SOURCE_PLATFORMS = new Set(['1688', 'yangkeduo']);
+const SOURCE_PLATFORM_ALIASES = { ali1688: '1688', pdd: 'yangkeduo' };
+
+export function normalizeSourcePlatform(p) {
+  const s = String(p || '').trim();
+  return SOURCE_PLATFORM_ALIASES[s] || s;
+}
+
+/** 按链接识别平台(手动新增货源用):拼多多优先,其次 1688 */
+export function detectSourcePlatform(input, fallback = '1688') {
+  const s = String(input || '').toLowerCase();
+  if (/yangkeduo|pinduoduo/.test(s)) return 'yangkeduo';
+  if (/1688/.test(s)) return '1688';
+  return normalizeSourcePlatform(fallback) || '1688';
+}
+
+/** 货源身份键:有规格SKU用 skuId;没有(拼多多/老数据)用规格文本区分同商品不同规格 */
+function sourceIdentityKey({ sku, platform, gid, sid, spec }) {
+  const tail = sid ? sid : `~${String(spec || '').trim()}`;
+  return `${sku}|${platform}|${gid}|${tail}`;
 }
 
 /** Ozon 商品简介(product_data_cache) */
@@ -97,29 +122,37 @@ function loadProductBriefs(skus) {
   return map;
 }
 
-/** 货源库已有键集合:sku|platform|goodsId|skuId */
+/** 货源库已有键集合(与候选聚合同键口径) */
 function loadExistingKeys() {
   const set = new Set();
   const rows = db
     .prepare(
       `SELECT COALESCE(ozon_sku, 0) AS sku, platform,
-              COALESCE(source_item_id, '') AS gid, COALESCE(source_sku_id, '') AS sid
+              COALESCE(source_item_id, '') AS gid, COALESCE(source_sku_id, '') AS sid,
+              COALESCE(source_spec, '') AS spec
        FROM op_supplier_product`
     )
     .all();
-  for (const r of rows) set.add(`${r.sku}|${r.platform}|${r.gid}|${r.sid}`);
+  for (const r of rows) {
+    set.add(sourceIdentityKey({ sku: r.sku, platform: r.platform, gid: r.gid, sid: r.sid, spec: r.spec }));
+  }
   return set;
 }
 
 /**
- * 历史采购 → 货源候选聚合(1688)
- * 每条 items_json 商品行(有 goodsId)生成候选,按 (sku, platform, goodsId, skuId) 聚合:
+ * 历史采购 → 货源候选聚合(1688 + 拼多多)
+ * 每条 items_json 商品行(有非空 goodsId)生成候选,按身份键聚合:
  * 采购次数(去重采购单)、最近采购价/时间/单号、供应商/账号、商品名/规格/图片。
- * @returns {Map<string, object>} key = sku|platform|goodsId|skuId
+ * @returns {Map<string, object>} key = sourceIdentityKey(...)
  */
-export function collectHistoryCandidates({ sku = null } = {}) {
-  const params = [];
-  let where = `po.platform = '1688' AND po.items_json IS NOT NULL AND po.items_json LIKE '%goodsId%'`;
+export function collectHistoryCandidates({ sku = null, platform = null } = {}) {
+  const plats = platform
+    ? [normalizeSourcePlatform(platform)].filter((p) => SUPPORTED_SOURCE_PLATFORMS.has(p))
+    : [...SUPPORTED_SOURCE_PLATFORMS];
+  if (!plats.length) return new Map();
+  const params = [...plats];
+  let where = `po.platform IN (${plats.map(() => '?').join(',')})
+    AND po.items_json IS NOT NULL AND po.items_json LIKE '%goodsId%'`;
   if (sku != null) {
     where += ' AND oi.sku = ?';
     params.push(Number(sku));
@@ -146,7 +179,7 @@ export function collectHistoryCandidates({ sku = null } = {}) {
       const gid = String(g.goodsId || '').trim();
       if (!gid) continue;
       const sid = String(g.skuId || '').trim();
-      const key = `${r.sku}|${r.platform}|${gid}|${sid}`;
+      const key = sourceIdentityKey({ sku: r.sku, platform: r.platform, gid, sid, spec: g.spec });
       let c = map.get(key);
       if (!c) {
         c = {
@@ -218,7 +251,7 @@ function mapSourceRow(r, briefs) {
 }
 
 /** 货源列表(分页) */
-export function listSources({ storeId = '', keyword = '', page = 1, pageSize = 20 } = {}) {
+export function listSources({ storeId = '', platform = '', keyword = '', page = 1, pageSize = 20 } = {}) {
   const pageNum = Math.max(1, Number(page) || 1);
   const size = Math.min(100, Math.max(1, Number(pageSize) || 20));
   const where = [];
@@ -226,6 +259,10 @@ export function listSources({ storeId = '', keyword = '', page = 1, pageSize = 2
   if (storeId) {
     where.push('sp.store_id = ?');
     args.push(storeId);
+  }
+  if (platform) {
+    where.push('sp.platform = ?');
+    args.push(normalizeSourcePlatform(platform));
   }
   const kw = String(keyword || '').trim();
   if (kw) {
@@ -261,14 +298,16 @@ export function listSources({ storeId = '', keyword = '', page = 1, pageSize = 2
  * 待确认候选(SKU 分组,仅返回尚未加入货源的候选)
  * 多商品行采购单的候选项带 ambiguous=true,前端提示「采购单含多件商品,请核对」
  */
-export function listCandidates({ storeId = '', keyword = '', page = 1, pageSize = 20 } = {}) {
+export function listCandidates({ storeId = '', keyword = '', platform = '', page = 1, pageSize = 20 } = {}) {
   const pageNum = Math.max(1, Number(page) || 1);
   const size = Math.min(100, Math.max(1, Number(pageSize) || 20));
   const existing = loadExistingKeys();
-  const all = collectHistoryCandidates();
+  const all = collectHistoryCandidates({ platform: platform || null });
   const groups = new Map();
   for (const c of all.values()) {
-    if (existing.has(`${c.ozonSku}|${c.platform}|${c.sourceItemId}|${c.sourceSkuId}`)) continue;
+    if (existing.has(sourceIdentityKey({
+      sku: c.ozonSku, platform: c.platform, gid: c.sourceItemId, sid: c.sourceSkuId, spec: c.sourceSpec,
+    }))) continue;
     let g = groups.get(c.ozonSku);
     if (!g) {
       g = { ozonSku: c.ozonSku, offerId: c.offerId, storeId: c.storeId, latestAt: '', candidates: [] };
@@ -319,11 +358,15 @@ export function getSkuDetail(sku) {
     .prepare(`SELECT sp.* FROM op_supplier_product sp WHERE sp.ozon_sku = ? ORDER BY sp.is_primary DESC, sp.id DESC`)
     .all(Number(sku));
   const sources = rows.map((r) => mapSourceRow(r, new Map([[String(sku), brief]])));
-  const existing = new Set(sources.map((s) => `${s.platform}|${s.sourceItemId}|${s.sourceSkuId}`));
+  const existing = new Set(sources.map((s) => sourceIdentityKey({
+    sku, platform: s.platform, gid: s.sourceItemId, sid: s.sourceSkuId, spec: s.sourceSpec,
+  })));
   const candMap = collectHistoryCandidates({ sku });
   const candidates = [...candMap.values()].map((c) => ({
     ...c,
-    exists: existing.has(`${c.platform}|${c.sourceItemId}|${c.sourceSkuId}`),
+    exists: existing.has(sourceIdentityKey({
+      sku: c.ozonSku, platform: c.platform, gid: c.sourceItemId, sid: c.sourceSkuId, spec: c.sourceSpec,
+    })),
   }));
   candidates.sort((a, b) => (b.purchaseCount || 0) - (a.purchaseCount || 0));
   return { product: brief, sources, candidates };
@@ -363,7 +406,10 @@ function applyPrimary(id, storeId, ozonSku) {
  * @returns {{id:number, created:boolean}}
  */
 export function upsertSource(p = {}) {
-  const platform = String(p.platform || '1688');
+  const platform = normalizeSourcePlatform(p.platform || '1688');
+  if (!SUPPORTED_SOURCE_PLATFORMS.has(platform)) {
+    throw new ApiError(ErrorCode.VALIDATION_ERROR, `暂不支持的货源平台: ${platform}(当前支持 1688/拼多多)`);
+  }
   const ozonSku = Number(p.ozonSku);
   if (!Number.isInteger(ozonSku) || ozonSku <= 0) {
     throw new ApiError(ErrorCode.VALIDATION_ERROR, 'ozonSku 必填且必须为正整数');
@@ -375,19 +421,30 @@ export function upsertSource(p = {}) {
   const storeId = String(p.storeId || product.row.store_id || '');
   if (isBlank(storeId)) throw new ApiError(ErrorCode.VALIDATION_ERROR, 'storeId 缺失(商品缓存无店铺归属)');
   const sourceItemId = String(p.sourceItemId || '').trim() || parseSourceItemId(p.sourceUrl || '');
-  if (!sourceItemId) throw new ApiError(ErrorCode.VALIDATION_ERROR, '请填写 1688 商品链接或商品ID');
+  if (!sourceItemId) throw new ApiError(ErrorCode.VALIDATION_ERROR, '请填写货源商品链接或商品ID(1688/拼多多)');
   const sourceSkuId = String(p.sourceSkuId || '').trim();
+  const sourceSpec = String(p.sourceSpec || '').trim();
   const offerId = String(p.offerId || product.data.offer_id || '').trim();
   const sourceUrl = String(p.sourceUrl || '').trim() || buildSourceUrl(platform, sourceItemId);
   const now = nowIso();
 
-  const existing = db
-    .prepare(
-      `SELECT id, is_primary FROM op_supplier_product
-       WHERE store_id = ? AND COALESCE(ozon_sku, 0) = ? AND platform = ?
-         AND COALESCE(source_item_id, '') = ? AND COALESCE(source_sku_id, '') = ?`
-    )
-    .get(storeId, ozonSku, platform, sourceItemId, sourceSkuId);
+  // 身份键:有平台规格SKU(如 1688 skuID)按 skuID;无 skuID(拼多多)按规格文本区分
+  const existing = sourceSkuId
+    ? db
+        .prepare(
+          `SELECT id, is_primary FROM op_supplier_product
+           WHERE store_id = ? AND COALESCE(ozon_sku, 0) = ? AND platform = ?
+             AND COALESCE(source_item_id, '') = ? AND COALESCE(source_sku_id, '') = ?`
+        )
+        .get(storeId, ozonSku, platform, sourceItemId, sourceSkuId)
+    : db
+        .prepare(
+          `SELECT id, is_primary FROM op_supplier_product
+           WHERE store_id = ? AND COALESCE(ozon_sku, 0) = ? AND platform = ?
+             AND COALESCE(source_item_id, '') = ?
+             AND COALESCE(source_sku_id, '') = '' AND COALESCE(source_spec, '') = ?`
+        )
+        .get(storeId, ozonSku, platform, sourceItemId, sourceSpec);
 
   const sets = [];
   const args = [];
@@ -399,7 +456,7 @@ export function upsertSource(p = {}) {
   set('offer_id', offerId || null);
   set('source_url', sourceUrl || null);
   set('title', isBlank(p.title) ? undefined : String(p.title));
-  set('source_spec', isBlank(p.sourceSpec) ? undefined : String(p.sourceSpec));
+  set('source_spec', isBlank(p.sourceSpec) ? undefined : String(p.sourceSpec).trim());
   set('source_image', isBlank(p.sourceImage) ? undefined : String(p.sourceImage));
   set('seller_name', isBlank(p.sellerName) ? undefined : String(p.sellerName));
   set('buyer_account', isBlank(p.buyerAccount) ? undefined : String(p.buyerAccount));
@@ -436,7 +493,7 @@ export function upsertSource(p = {}) {
       source_url: sourceUrl || null,
       source_item_id: sourceItemId,
       source_sku_id: sourceSkuId || null,
-      source_spec: isBlank(p.sourceSpec) ? null : String(p.sourceSpec),
+      source_spec: isBlank(p.sourceSpec) ? null : String(p.sourceSpec).trim(),
       source_image: isBlank(p.sourceImage) ? null : String(p.sourceImage),
       seller_name: isBlank(p.sellerName) ? null : String(p.sellerName),
       buyer_account: isBlank(p.buyerAccount) ? null : String(p.buyerAccount),
@@ -539,13 +596,14 @@ export function confirmCandidates(items = []) {
 export function backfillFromHistory() {
   const orders = db
     .prepare(
-      `SELECT po.id AS po_id, po.items_json,
+      `SELECT po.id AS po_id, po.platform, po.items_json,
               GROUP_CONCAT(DISTINCT oi.sku) AS skus,
               MAX(COALESCE(po.pay_at, po.gmt_create)) AS latest
        FROM op_purchase_order po
        JOIN op_purchase_link pl ON pl.purchase_order_id = po.id
        JOIN op_ozon_order_item oi ON oi.id = pl.ozon_order_item_id
-       WHERE po.platform = '1688' AND po.items_json IS NOT NULL AND po.items_json LIKE '%goodsId%'
+       WHERE po.platform IN ('1688', 'yangkeduo')
+         AND po.items_json IS NOT NULL AND po.items_json LIKE '%goodsId%'
        GROUP BY po.id
        ORDER BY latest DESC, po.id DESC`
     )
@@ -562,7 +620,9 @@ export function backfillFromHistory() {
     const gid = String(g.goodsId || '').trim();
     if (!gid) { skipped += 1; continue; }
     const sid = String(g.skuId || '').trim();
-    const cand = all.get(`${skus[0]}|1688|${gid}|${sid}`);
+    const cand = all.get(sourceIdentityKey({
+      sku: String(skus[0]).trim(), platform: o.platform, gid, sid, spec: g.spec,
+    }));
     if (!cand) { skipped += 1; continue; }
     try {
       const r = upsertSource(cand);
@@ -577,7 +637,7 @@ export function backfillFromHistory() {
 
 /**
  * 采购单自动积累(采购保存/补全后调用)
- * 仅处理:1688 + 单商品行 + 关联包裹只有 1 个 SKU 的无歧义场景。
+ * 仅处理:1688/拼多多 + 单商品行 + 关联包裹只有 1 个 SKU 的无歧义场景。
  * @returns {{updated?:boolean, skipped?:string}}
  */
 export function accumulateFromPurchaseOrder(purchaseOrderId) {
@@ -587,7 +647,7 @@ export function accumulateFromPurchaseOrder(purchaseOrderId) {
     )
     .get(Number(purchaseOrderId));
   if (!po) return { skipped: 'not_found' };
-  if (po.platform !== '1688') return { skipped: 'platform' };
+  if (!SUPPORTED_SOURCE_PLATFORMS.has(po.platform)) return { skipped: 'platform' };
   const goods = parseJsonArray(po.items_json);
   if (goods.length !== 1) return { skipped: 'multi_goods' };
   const gid = String(goods[0].goodsId || '').trim();
@@ -605,7 +665,9 @@ export function accumulateFromPurchaseOrder(purchaseOrderId) {
   if (distinctSkus.length !== 1) return { skipped: 'multi_sku' };
   const cand = collectHistoryCandidates({ sku: distinctSkus[0] });
   const sid = String(goods[0].skuId || '').trim();
-  const c = cand.get(`${distinctSkus[0]}|1688|${gid}|${sid}`);
+  const c = cand.get(sourceIdentityKey({
+    sku: distinctSkus[0], platform: po.platform, gid, sid, spec: goods[0].spec,
+  }));
   if (!c) return { skipped: 'no_candidate' };
   try {
     const r = upsertSource(c);

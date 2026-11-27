@@ -828,9 +828,10 @@ CREATE TABLE IF NOT EXISTS op_supplier_product (
   gmt_create      TEXT,
   gmt_modified    TEXT
 );
--- 唯一键:同一店铺 SKU 的同一平台货源(商品ID+规格SKU)只保留一行
+-- 唯一键:同一店铺 SKU 的同一平台货源(商品ID+规格SKU)只保留一行;
+-- 无规格SKU的平台(拼多多)用规格文本兜底区分同商品不同规格
 CREATE UNIQUE INDEX IF NOT EXISTS idx_op_sp_sku_source
-  ON op_supplier_product(store_id, COALESCE(ozon_sku, 0), platform, COALESCE(source_item_id, ''), COALESCE(source_sku_id, ''));
+  ON op_supplier_product(store_id, COALESCE(ozon_sku, 0), platform, COALESCE(source_item_id, ''), COALESCE(source_sku_id, ''), COALESCE(source_spec, ''));
 CREATE INDEX IF NOT EXISTS idx_op_sp_sku ON op_supplier_product(ozon_sku);
 CREATE INDEX IF NOT EXISTS idx_op_sp_store ON op_supplier_product(store_id);
 

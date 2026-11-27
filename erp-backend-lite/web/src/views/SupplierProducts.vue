@@ -24,7 +24,7 @@ const { show } = useToast();
 const storesStore = useStoresStore();
 
 const tab = ref('sources');
-const filter = reactive({ storeId: '', keyword: '' });
+const filter = reactive({ storeId: '', platform: '', keyword: '' });
 const pageSize = ref(20);
 
 // 货源列表
@@ -51,6 +51,7 @@ function storeName(id) {
 function baseParams() {
   const p = { pageSize: pageSize.value };
   if (filter.storeId) p.storeId = filter.storeId;
+  if (filter.platform) p.platform = filter.platform;
   if (filter.keyword.trim()) p.keyword = filter.keyword.trim();
   return p;
 }
@@ -123,7 +124,7 @@ function onCandidatesPage(p) {
 // ── 回填 ──
 async function doBackfill() {
   if (backfilling.value) return;
-  if (!window.confirm('将从历史采购单回填货源(仅单商品行+单SKU的无歧义订单),可重复执行。是否继续?')) return;
+  if (!window.confirm('将从历史采购单回填货源(1688/拼多多,仅单商品行+单SKU的无歧义订单),可重复执行。是否继续?')) return;
   backfilling.value = true;
   try {
     const r = await backfillSupplierProducts();
@@ -343,7 +344,7 @@ onMounted(async () => {
       <div>
         <h2 class="page-title">货源管理</h2>
         <p class="page-desc">
-          维护 Ozon 商品的平台货源(1688 优先)。采购单保存/补全时自动积累无歧义货源;多商品行订单只生成候选,需人工确认。
+          维护 Ozon 商品的平台货源(1688 / 拼多多)。采购单保存/补全时自动积累无歧义货源;多商品行订单只生成候选,需人工确认。
         </p>
       </div>
       <div class="header-actions">
@@ -368,10 +369,15 @@ onMounted(async () => {
           <option value="">全部店铺</option>
           <option v-for="s in storeOptions" :key="s.id" :value="s.id">{{ s.name || s.id }}</option>
         </select>
+        <select v-model="filter.platform" class="form-control platform-select" @change="onFilter">
+          <option value="">全部平台</option>
+          <option value="1688">1688</option>
+          <option value="yangkeduo">拼多多</option>
+        </select>
         <input
           v-model="filter.keyword"
           class="form-control search"
-          placeholder="搜索 SKU / offer / 1688商品ID / 标题 / 规格"
+          placeholder="搜索 SKU / offer / 货源商品ID / 标题 / 规格"
           @keyup.enter="onFilter"
         />
         <button class="btn btn-ghost btn-sm" @click="onFilter">查询</button>
@@ -414,15 +420,18 @@ onMounted(async () => {
                 <img v-if="row.sourceImage" :src="row.sourceImage" class="goods-img" referrerpolicy="no-referrer" loading="lazy" alt="" />
                 <div v-else class="goods-img goods-img-empty"></div>
                 <div class="goods-info">
-                  <a
-                    v-if="row.sourceUrl"
-                    class="goods-name link"
-                    :href="row.sourceUrl"
-                    target="_blank"
-                    rel="noopener"
-                    :title="row.title"
-                  >{{ row.title || '1688 商品' }}</a>
-                  <span v-else class="goods-name">{{ row.title || '—' }}</span>
+                  <span class="goods-name-row">
+                    <span class="platform-tag">{{ platformLabel(row.platform) }}</span>
+                    <a
+                      v-if="row.sourceUrl"
+                      class="goods-name link"
+                      :href="row.sourceUrl"
+                      target="_blank"
+                      rel="noopener"
+                      :title="row.title"
+                    >{{ row.title || '货源商品' }}</a>
+                    <span v-else class="goods-name">{{ row.title || '—' }}</span>
+                  </span>
                   <span class="goods-sub">{{ row.sourceSpec || '—' }}</span>
                   <span class="goods-sub mono">
                     {{ row.sourceItemId }}<template v-if="row.sourceSkuId"> · SKU {{ row.sourceSkuId }}</template>
@@ -494,15 +503,18 @@ onMounted(async () => {
                     <img v-if="c.sourceImage" :src="c.sourceImage" class="goods-img" referrerpolicy="no-referrer" loading="lazy" alt="" />
                     <div v-else class="goods-img goods-img-empty"></div>
                     <div class="goods-info">
-                      <a
-                        v-if="c.sourceUrl"
-                        class="goods-name link"
-                        :href="c.sourceUrl"
-                        target="_blank"
-                        rel="noopener"
-                        :title="c.title"
-                      >{{ c.title || '1688 商品' }}</a>
-                      <span v-else class="goods-name">{{ c.title || '—' }}</span>
+                      <span class="goods-name-row">
+                        <span class="platform-tag">{{ platformLabel(c.platform) }}</span>
+                        <a
+                          v-if="c.sourceUrl"
+                          class="goods-name link"
+                          :href="c.sourceUrl"
+                          target="_blank"
+                          rel="noopener"
+                          :title="c.title"
+                        >{{ c.title || '货源商品' }}</a>
+                        <span v-else class="goods-name">{{ c.title || '—' }}</span>
+                      </span>
                       <span class="goods-sub">{{ c.sourceSpec || '—' }}</span>
                       <span class="goods-sub mono">
                         {{ c.sourceItemId }}<template v-if="c.sourceSkuId"> · SKU {{ c.sourceSkuId }}</template>
@@ -561,16 +573,16 @@ onMounted(async () => {
         <div v-else-if="create.previewErr" class="form-err">{{ create.previewErr }}</div>
 
         <label class="form-row">
-          <span class="form-label">1688 商品链接 / ID <b class="required">*</b></span>
+          <span class="form-label">货源商品链接 / ID（1688 / 拼多多） <b class="required">*</b></span>
           <input
             v-model="create.sourceUrl"
             class="form-control"
-            placeholder="https://detail.1688.com/offer/123456789.html 或商品ID"
+            placeholder="https://detail.1688.com/offer/123456789.html 或 https://mobile.yangkeduo.com/goods.html?goods_id=..."
           />
         </label>
         <label class="form-row">
-          <span class="form-label">1688 规格</span>
-          <input v-model="create.sourceSpec" class="form-control" placeholder="如 颜色:黑色;尺码:XL" />
+          <span class="form-label">规格</span>
+          <input v-model="create.sourceSpec" class="form-control" placeholder="如 颜色:黑色;尺码:XL（拼多多可填订单规格文本）" />
         </label>
         <div class="form-row-inline">
           <label class="form-row">
@@ -643,6 +655,7 @@ onMounted(async () => {
 .tab-count { margin-left: 4px; opacity: 0.85; }
 .toolbar-right { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .store-select { width: 160px; }
+.platform-select { width: 120px; }
 .search { width: 300px; }
 .form-control { width: 100%; border: 1px solid #e5e6eb; border-radius: 6px; padding: 6px 10px; font-size: 13px; }
 .card { background: #fff; border-radius: 8px; padding: 12px; }
@@ -662,6 +675,8 @@ onMounted(async () => {
 .goods-img { width: 42px; height: 42px; border-radius: 4px; object-fit: cover; background: #f2f3f5; flex-shrink: 0; }
 .goods-img-empty { background: #f2f3f5; }
 .goods-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.goods-name-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.platform-tag { flex-shrink: 0; background: #eef4ff; color: #165dff; border-radius: 4px; padding: 0 6px; font-size: 11px; line-height: 18px; }
 .goods-name { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #1f2329; }
 .goods-name.link { color: #165dff; text-decoration: none; }
 .goods-name.link:hover { text-decoration: underline; }

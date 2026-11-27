@@ -125,6 +125,15 @@ export async function initSchema() {
       addSpCol('note', 'TEXT');
       // 旧唯一索引(store_id + offer_id + source_item_id)会阻止同一商品多规格建档,废弃
       db.exec('DROP INDEX IF EXISTS idx_op_sp_offer_source');
+      // 2026-11-27:唯一索引补 source_spec——拼多多没有规格SKU ID,同商品不同规格
+      // 需按规格文本区分;旧索引定义不含该列,检测到后丢弃由 schema.sql 重建
+      const spIdx = db
+        .prepare(`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_op_sp_sku_source'`)
+        .get();
+      if (spIdx && !String(spIdx.sql || '').includes('source_spec')) {
+        db.exec('DROP INDEX idx_op_sp_sku_source');
+        console.log('[db] migration: rebuilt idx_op_sp_sku_source (include source_spec)');
+      }
     }
   } catch (e) {
     console.error('[db] migration op_supplier_product columns failed:', e?.message || e);
