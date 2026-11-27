@@ -402,7 +402,7 @@ class OrderDetailActivity : ComponentActivity() {
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
                 ).apply { leftMargin = dp(8) }
-                setOnClickListener { openSourceUrl(sp.sourceUrl) }
+                setOnClickListener { openSourceProduct(sp) }
             })
         }
         card.addView(head)
@@ -420,7 +420,7 @@ class OrderDetailActivity : ComponentActivity() {
             val u = if (sp.sourceImage.startsWith("/")) Api.BASE_URL + sp.sourceImage else sp.sourceImage
             img.load(u)
         }
-        if (!sp.sourceUrl.isNullOrBlank()) img.setOnClickListener { openSourceUrl(sp.sourceUrl) }
+        if (!sp.sourceUrl.isNullOrBlank()) img.setOnClickListener { openSourceProduct(sp) }
         body.addView(img)
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -432,7 +432,7 @@ class OrderDetailActivity : ComponentActivity() {
             textSize = 12f
             maxLines = 2
             ellipsize = TextUtils.TruncateAt.END
-            if (!sp.sourceUrl.isNullOrBlank()) setOnClickListener { openSourceUrl(sp.sourceUrl) }
+            if (!sp.sourceUrl.isNullOrBlank()) setOnClickListener { openSourceProduct(sp) }
         })
         if (!sp.sourceSpec.isNullOrBlank()) {
             col.addView(TextView(this).apply {
@@ -488,6 +488,60 @@ class OrderDetailActivity : ComponentActivity() {
             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
         } catch (e: Exception) {
             toast("无法打开货源链接")
+        }
+    }
+
+    /** 打开货源商品(2026-11-28):优先用平台 deep link 拉起已安装 APP 的商品详情页,
+     *  候选 scheme 依次尝试(能解析才拉起),全部失败回退浏览器打开货源链接。
+     */
+    private fun openSourceProduct(sp: SupplierProduct) {
+        val (schemes, web) = sourceProductDeepLinks(sp.platform, sp.sourceItemId, sp.sourceUrl)
+        for (scheme in schemes) {
+            val appIntent = Intent(Intent.ACTION_VIEW, Uri.parse(scheme)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (packageManager.resolveActivity(appIntent, 0) != null) {
+                if (runCatching { startActivity(appIntent) }.isSuccess) return
+            }
+        }
+        if (!web.isNullOrBlank()) openSourceUrl(web) else toast("未找到可跳转的应用")
+    }
+
+    /**
+     * 平台 → 商品详情候选 deep link 列表 + 浏览器兜底 URL
+     * - 拼多多: pinduoduo://com.xunmeng.pinduoduo/goods.html?goods_id=
+     * - 1688: wireless1688 plugin 包装(与订单拉起同款) → https 换 scheme 两种写法
+     * - 淘宝: dps:// (分享协议) → tbopen:// → taobao://item
+     * - 闲鱼: fleamarket://item?id= (官方唤端格式)
+     */
+    private fun sourceProductDeepLinks(platform: String?, itemId: String?, webUrl: String?): Pair<List<String>, String?> {
+        val id = itemId?.trim().orEmpty()
+        val web = webUrl?.trim().orEmpty()
+        if (id.isBlank()) return emptyList<String>() to web.ifBlank { null }
+        return when (platform?.lowercase()) {
+            "1688", "alibaba", "阿里巴巴" -> {
+                val h5 = "https://detail.m.1688.com/offer/$id.html"
+                listOf(
+                    "wireless1688://ma.m.1688.com/plugin?url=" + Uri.encode(h5),
+                    "wireless1688://detail.m.1688.com/offer/$id.html",
+                    "wireless1688://detail.1688.com/offer/$id.html"
+                ) to "https://detail.1688.com/offer/$id.html"
+            }
+            "pdd", "yangkeduo", "拼多多" -> listOf(
+                "pinduoduo://com.xunmeng.pinduoduo/goods.html?goods_id=$id",
+                "pinduoduo://goods.html?goods_id=$id"
+            ) to "https://mobile.yangkeduo.com/goods.html?goods_id=$id"
+            "taobao", "淘宝", "tmall", "天猫" -> {
+                val itemUrl = "https://item.taobao.com/item.htm?id=$id"
+                listOf(
+                    "dps://p?url=" + Uri.encode(itemUrl),
+                    "tbopen://m.taobao.com/tbopen/index.html?source=erp&h5Url=" + Uri.encode(itemUrl),
+                    "taobao://item.taobao.com/item.htm?id=$id"
+                ) to itemUrl
+            }
+            "xianyu", "闲鱼", "goofish" -> listOf(
+                "fleamarket://item?id=$id",
+                "fleamarket://2.taobao.com/onepiece?itemId=$id"
+            ) to web.ifBlank { "https://www.goofish.com/item?id=$id" }
+            else -> emptyList<String>() to web.ifBlank { null }
         }
     }
 
@@ -1676,6 +1730,8 @@ class OrderDetailActivity : ComponentActivity() {
                 "pinduoduo://order.html?order_sn=$testSn",
                 "pinduoduo://order_detail?order_sn=$testSn",
                 "pinduoduo://goods.html?goods_id=1",
+                "pinduoduo://com.xunmeng.pinduoduo/goods.html?goods_id=897701593039",
+                "pinduoduo://goods.html?goods_id=897701593039",
                 "pddopen://",
                 "pdd://",
                 "https://mobile.yangkeduo.com/order.html?order_sn=$testSn",
@@ -1688,6 +1744,9 @@ class OrderDetailActivity : ComponentActivity() {
                 "taobao://",
                 "taobao://item?id=1",
                 "taobao://tmall.com/item.htm?id=1",
+                "taobao://item.taobao.com/item.htm?id=664135953034",
+                "dps://p?url=" + Uri.encode("https://item.taobao.com/item.htm?id=664135953034"),
+                "tbopen://m.taobao.com/tbopen/index.html?h5Url=" + Uri.encode("https://item.taobao.com/item.htm?id=664135953034"),
                 "tbopen://",
                 "tbopen://m.taobao.com/tbopen/index.html",
                 "https://item.taobao.com/item.htm?id=1"
@@ -1698,8 +1757,17 @@ class OrderDetailActivity : ComponentActivity() {
                 "wireless1688://",
                 "wireless1688://orderDetail?orderId=1",
                 "wireless1688://order/detail?orderId=1",
+                "wireless1688://ma.m.1688.com/plugin?url=" + Uri.encode("https://detail.m.1688.com/offer/989472258361.html"),
+                "wireless1688://detail.m.1688.com/offer/989472258361.html",
+                "wireless1688://detail.1688.com/offer/989472258361.html",
                 "https://detail.1688.com/offer/1.html",
                 "https://air.1688.com/app/ctf-page/trade-order-list/buyer-order-list.html?word=$testSn"
+            )),
+            Triple("闲鱼", "com.taobao.idlefish", listOf(
+                "fleamarket://",
+                "fleamarket://item?id=1063009424954",
+                "fleamarket://2.taobao.com/onepiece?itemId=1063009424954",
+                "https://www.goofish.com/item?id=1063009424954"
             )))
         for ((name, pkgName, uris) in platforms) {
             sb.append("■ ").append(name).append('\n')

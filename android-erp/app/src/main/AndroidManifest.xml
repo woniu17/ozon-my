@@ -32,6 +32,7 @@
     <queries>
         <package android:name="com.xunmeng.pinduoduo" />
         <package android:name="com.taobao.taobao" />
+        <package android:name="com.taobao.idlefish" />
         <package android:name="com.alibaba.wireless" />
         <intent>
             <action android:name="android.intent.action.VIEW" />
@@ -64,6 +65,10 @@
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="wireless1688" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="fleamarket" />
         </intent>
         <intent>
             <action android:name="android.intent.action.VIEW" />
