@@ -2,6 +2,34 @@
 import jwt from 'jsonwebtoken';
 import config from '../config/index.js';
 import { ApiError, ErrorCode } from '../utils/error-codes.js';
+import logger from './log.js';
+
+// 临时诊断(2026-11-27):发运页出现"登录后 4 秒 token 被判无效",服务端日志缺少
+// token 指纹,无法判断是过期/签名不符/被覆盖。这里在 401 时打印 token 指纹与解析结果,
+// 定位后移除。只打印前 12 位与 iat/exp,不落全量 token。
+function tokenFingerprint(token) {
+  const head = String(token || '').slice(0, 12) + '…';
+  let iat = null;
+  let exp = null;
+  let id = null;
+  try {
+    const p = jwt.decode(token) || {};
+    iat = p.iat ?? null;
+    exp = p.exp ?? null;
+    id = p.id ?? null;
+  } catch {
+    /* 非法 JWT */
+  }
+  return {
+    tokenHead: head,
+    tokenLen: String(token || '').length,
+    tokenId: id,
+    iat,
+    exp,
+    iatText: iat ? new Date(iat * 1000).toISOString() : null,
+    expText: exp ? new Date(exp * 1000).toISOString() : null,
+  };
+}
 
 const PUBLIC_PATHS = new Set([
   '/health',
@@ -48,6 +76,10 @@ export function authMiddleware(req, _res, next) {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';
   if (!token) {
+    logger.warn(
+      { method: req.method, path: req.path, referer: req.headers.referer || '', ua: req.headers['user-agent'] || '' },
+      'auth-diag: 缺少 Authorization token'
+    );
     return next(new ApiError(ErrorCode.AUTH_EXPIRED, '缺少 Authorization token'));
   }
 
@@ -55,6 +87,16 @@ export function authMiddleware(req, _res, next) {
   try {
     payload = jwt.verify(token, config.jwtSecret);
   } catch (e) {
+    logger.warn(
+      {
+        method: req.method,
+        path: req.path,
+        referer: req.headers.referer || '',
+        verifyError: e.message,
+        ...tokenFingerprint(token),
+      },
+      'auth-diag: token 校验失败'
+    );
     return next(new ApiError(ErrorCode.AUTH_EXPIRED, 'token 已过期或无效'));
   }
 

@@ -42,7 +42,12 @@ export const useAuthStore = defineStore('auth', {
   },
 });
 
-// 监听全局登出事件(request 遇 401 时触发)
+// 监听全局登出事件(request 遇 401 且确认当前登录态失效时触发)
+// 2026-11-27:登出后必须跳到登录页——此前只清 token,App 只是隐藏外框,
+// 页面仍停在原路由继续发请求(发运页一次十几个接口连环 401),看起来像"进页面就掉登录"。
 window.addEventListener('auth:logout', () => {
   useAuthStore().logout();
+  if (!window.location.hash.startsWith('#/login')) {
+    window.location.hash = '#/login';
+  }
 });
