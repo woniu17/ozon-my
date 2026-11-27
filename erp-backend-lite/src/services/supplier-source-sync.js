@@ -73,7 +73,7 @@ function writeGoods(poId, platform, purchaseSn, sellerName, goods) {
   return changed;
 }
 
-/** 拼多多:分页拉取全部订单,批量匹配缺失单号 */
+/** 拼多多:分块分页拉取全部订单(每块 ≤10 页,块间续传 offset,避免 withPage 60s 超时) */
 async function syncPdd() {
   const rows = listMissing('yangkeduo');
   state.total += rows.length;
@@ -85,29 +85,52 @@ async function syncPdd() {
     return;
   }
   const bySn = new Map(rows.map((r) => [r.purchase_sn, r]));
-  let res;
-  try {
-    res = await fetchPddOrdersPaged({
-      account: accounts[0],
-      orderSns: [...bySn.keys()],
-      intervalMs: PDD_PAGE_INTERVAL_MS,
-      onPage: (p) => {
-        state.page = p.pages;
-        state.scanned = p.scanned;
-        state.found = p.found;
-      },
-    });
-  } catch (e) {
+  const foundMap = new Map();
+  let offset = '';
+  let exhausted = false;
+  let pagesTotal = 0;
+  let scannedTotal = 0;
+  const MAX_CHUNKS = 80; // 兜底:最多 800 页
+  for (let chunk = 0; chunk < MAX_CHUNKS && !exhausted && foundMap.size < bySn.size; chunk += 1) {
+    let res;
+    try {
+      res = await fetchPddOrdersPaged({
+        account: accounts[0],
+        orderSns: [...bySn.keys()],
+        startOffset: offset,
+        intervalMs: PDD_PAGE_INTERVAL_MS,
+        onPage: (p) => {
+          state.page = pagesTotal + p.pages;
+          state.scanned = scannedTotal + p.scanned;
+          state.found = foundMap.size + p.found;
+        },
+      });
+    } catch (e) {
+      state.lastError = `拼多多: ${e?.message || String(e)}`;
+      logger.warn({ err: state.lastError, chunk }, '[supplier-sync] 拼多多分块分页失败');
+      break;
+    }
+    for (const o of res.orders || []) foundMap.set(o.orderSn, o);
+    pagesTotal += res.pages || 0;
+    scannedTotal += res.scanned || 0;
+    state.page = pagesTotal;
+    state.scanned = scannedTotal;
+    state.found = foundMap.size;
+    offset = res.nextOffset || '';
+    exhausted = !!res.exhausted || !offset;
+    if (!res.pages) exhausted = true;
+  }
+  if (!foundMap.size) {
     state.failed += rows.length;
-    state.lastError = `拼多多: ${e?.message || String(e)}`;
-    logger.warn({ err: state.lastError }, '[supplier-sync] 拼多多分页拉取失败');
+    if (!state.lastError) state.lastError = '拼多多未匹配到任何缺失订单(分页可能未覆盖)';
     return;
   }
-  const foundMap = new Map((res.orders || []).map((o) => [o.orderSn, o]));
   for (const [sn, r] of bySn) {
     const order = foundMap.get(sn);
     if (!order || !order.goods || !order.goods.length) {
-      state.notFound += 1;
+      // 完整扫描仍未命中 → 平台无此单/无商品行;未扫完 → 计入失败(未覆盖)
+      if (exhausted) state.notFound += 1;
+      else state.failed += 1;
       state.done += 1;
       continue;
     }
@@ -120,7 +143,10 @@ async function syncPdd() {
     }
     state.done += 1;
   }
-  logger.info({ ...res, matched: foundMap.size, wanted: rows.length }, '[supplier-sync] 拼多多分页同步完成');
+  logger.info(
+    { pages: pagesTotal, scanned: scannedTotal, matched: foundMap.size, wanted: rows.length, exhausted },
+    '[supplier-sync] 拼多多分页同步完成'
+  );
 }
 
 /** 1688:按单号搜索(OpenAPI,限速) */

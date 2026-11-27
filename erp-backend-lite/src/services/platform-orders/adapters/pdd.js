@@ -326,15 +326,18 @@ async function listPddOrders({ tab = 'all', size = 30, account } = {}) {
 
 /** 分页拉取订单(2026-11-27,货源商品ID补齐用)
  *  order_list_v4 支持 offset 游标翻页;命中全部目标单号或翻完即结束,避免逐单搜索。
+ *  注意:withPage 有 60s 任务超时,本函数按块执行(默认最多 10 页/块),调用方用 startOffset
+ *  续传直到 exhausted——整批 700+ 单分多块跑,避免单次任务超时被回收。
  *  @param {{account:string, orderSns?:string[], maxPages?:number, size?:number, intervalMs?:number,
- *           onPage?:function({pages:number, scanned:number, found:number}):void}} p
- *  @returns {Promise<{orders:Array, pages:number, exhausted:boolean}>} */
+ *           startOffset?:string, onPage?:function({pages:number, scanned:number, found:number}):void}} p
+ *  @returns {Promise<{orders:Array, pages:number, scanned:number, exhausted:boolean, nextOffset:string}>} */
 async function fetchPddOrdersPaged({
   account,
   orderSns = null,
-  maxPages = 300,
+  maxPages = 10,
   size = 50,
-  intervalMs = 2000,
+  intervalMs = 1500,
+  startOffset = '',
   onPage = null,
 } = {}) {
   return withPage(account, 'pdd', PDD_ENTRY, PDD_ORIGIN, async (page) => {
@@ -344,7 +347,7 @@ async function fetchPddOrdersPaged({
     const wanted = Array.isArray(orderSns) ? new Set(orderSns) : null;
     const pageSize = Math.min(Number(size) || 50, 50);
     const found = new Map();
-    let offset = '';
+    let offset = String(startOffset || '');
     let pages = 0;
     let scanned = 0;
     for (let i = 0; i < maxPages; i += 1) {
@@ -365,7 +368,7 @@ async function fetchPddOrdersPaged({
       pages += 1;
       if (!raw.length) {
         if (onPage) onPage({ pages, scanned, found: found.size });
-        return { orders: [...found.values()], pages, exhausted: true };
+        return { orders: [...found.values()], pages, scanned, exhausted: true, nextOffset: '' };
       }
       scanned += raw.length;
       const normalized = normalizeOrders({ orders: raw });
@@ -373,14 +376,18 @@ async function fetchPddOrdersPaged({
         if (!wanted || wanted.has(o.orderSn)) found.set(o.orderSn, { ...o, account });
       }
       if (onPage) onPage({ pages, scanned, found: found.size });
-      if (wanted && found.size >= wanted.size) break;
+      if (wanted && found.size >= wanted.size) {
+        return { orders: [...found.values()], pages, scanned, exhausted: true, nextOffset: '' };
+      }
       const last = raw[raw.length - 1];
       const next = last && last.offset;
-      if (!next || raw.length < pageSize) return { orders: [...found.values()], pages, exhausted: true };
+      if (!next || raw.length < pageSize) {
+        return { orders: [...found.values()], pages, scanned, exhausted: true, nextOffset: '' };
+      }
       offset = String(next);
-      if (intervalMs > 0) await new Promise((res) => setTimeout(res, intervalMs));
+      if (intervalMs > 0 && i < maxPages - 1) await new Promise((res) => setTimeout(res, intervalMs));
     }
-    return { orders: [...found.values()], pages, exhausted: false };
+    return { orders: [...found.values()], pages, scanned, exhausted: false, nextOffset: offset };
   });
 }
 
