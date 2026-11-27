@@ -505,7 +505,8 @@ class OrderDetailActivity : ComponentActivity() {
                 .setPackage("com.xunmeng.pinduoduo")
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             if (runCatching { startActivity(appIntent) }.isSuccess) return
-            openSourceUrl(goodsUrl)
+            // 兜底优先用货源记录里的原链接(可能带分享参数),否则用拼好的商品页
+            openSourceUrl(sp.sourceUrl?.takeIf { it.isNotBlank() } ?: goodsUrl)
             return
         }
         val (schemes, web) = sourceProductDeepLinks(sp.platform, sp.sourceItemId, sp.sourceUrl)
