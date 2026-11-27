@@ -56,6 +56,7 @@ import com.yochylin.scanner.model.Pkg
 import com.yochylin.scanner.model.PurchaseHistory
 import com.yochylin.scanner.model.PurchaseItem
 import com.yochylin.scanner.model.PurchaseLink
+import com.yochylin.scanner.model.SupplierProduct
 import com.yochylin.scanner.model.Trace
 import com.yochylin.scanner.model.packageCount
 import com.yochylin.scanner.model.packagesDisplay
@@ -97,6 +98,7 @@ class OrderDetailActivity : ComponentActivity() {
     private lateinit var dPhotoContainer: LinearLayout
     private lateinit var dPoTitle: TextView
     private lateinit var dPoContainer: LinearLayout
+    private lateinit var dSupplierSourceContainer: LinearLayout
     private lateinit var dHistoryContainer: LinearLayout
     private lateinit var dTraceCard: LinearLayout
     private lateinit var dTraceTitle: TextView
@@ -154,6 +156,7 @@ class OrderDetailActivity : ComponentActivity() {
         dPhotoContainer = findViewById(R.id.dPhotoContainer)
         dPoTitle = findViewById(R.id.dPoTitle)
         dPoContainer = findViewById(R.id.dPoContainer)
+        dSupplierSourceContainer = findViewById(R.id.dSupplierSourceContainer)
         dHistoryContainer = findViewById(R.id.dHistoryContainer)
         dTraceCard = findViewById(R.id.dTraceCard)
         dTraceTitle = findViewById(R.id.dTraceTitle)
@@ -203,6 +206,7 @@ class OrderDetailActivity : ComponentActivity() {
                 traces = detail.traces ?: emptyList()
                 currentItems = detail.items ?: detail.`package`?.items ?: emptyList()
                 render(detail)
+                renderSupplierSources(detail.supplierProducts) // 货源商品(2026-11-28):未采购订单展示
                 loadStocks() // 库存独立接口,异步加载不阻塞详情
                 loadPriceWatchSnapshots() // 订单跟卖快照异步加载,不阻塞详情
                 loadPurchaseHistory() // 最近采购参考(2026-10-28),未采购订单展示同商品历史采购单
@@ -310,6 +314,180 @@ class OrderDetailActivity : ComponentActivity() {
         } catch (e: Exception) {
             // 历史参考失败不影响订单详情主流程
             renderPurchaseHistory(emptyList())
+        }
+    }
+
+    /** 渲染货源商品卡(2026-11-28):未采购订单展示已维护货源(1688/拼多多/淘宝/闲鱼),供录采购参考 */
+    private fun renderSupplierSources(list: List<SupplierProduct>?) {
+        dSupplierSourceContainer.removeAllViews()
+        if (links.isNotEmpty() || list.isNullOrEmpty()) {
+            dSupplierSourceContainer.visibility = View.GONE
+            return
+        }
+        dSupplierSourceContainer.visibility = View.VISIBLE
+        dSupplierSourceContainer.background = GradientDrawable().apply {
+            setColor(Color.parseColor("#eef4ff"))
+            cornerRadius = dp(6).toFloat()
+            setStroke(dp(1), Color.parseColor("#bedaff"))
+        }
+        dSupplierSourceContainer.setPadding(dp(10), dp(8), dp(10), dp(8))
+        dSupplierSourceContainer.addView(TextView(this).apply {
+            text = "货源商品 · 采购参考"
+            setTextColor(Color.parseColor("#165dff"))
+            textSize = 11f
+            typeface = Typeface.DEFAULT_BOLD
+        })
+        for (sp in list.take(5)) dSupplierSourceContainer.addView(buildSupplierSourceRow(sp))
+    }
+
+    /** 单条货源商品:平台/主货源/商品ID(可复制/打开) + 图片、标题、规格、最近采购、供应商 */
+    private fun buildSupplierSourceRow(sp: SupplierProduct): View {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(6) }
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(8).toFloat()
+                setColor(Color.WHITE)
+                setStroke(dp(1), Color.parseColor("#bedaff"))
+            }
+        }
+        val head = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val (fg, bg) = supplierPlatformColors(sp.platform)
+        head.addView(TextView(this).apply {
+            text = platformLabel(sp.platform)
+            setTextColor(fg)
+            textSize = 10f
+            setRoundedBg(bg, 4f)
+            setPadding(dp(6), dp(2), dp(6), dp(2))
+        })
+        if (sp.isPrimary == true) {
+            head.addView(TextView(this).apply {
+                text = "主货源"
+                setTextColor(Color.parseColor("#0b7a2d"))
+                textSize = 10f
+                setRoundedBg(Color.parseColor("#e8ffea"), 4f)
+                setPadding(dp(6), dp(2), dp(6), dp(2))
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { leftMargin = dp(4) }
+            })
+        }
+        if (!sp.sourceItemId.isNullOrBlank()) {
+            head.addView(TextView(this).apply {
+                text = sp.sourceItemId
+                setTextColor(Color.parseColor("#4e5969"))
+                textSize = 10f
+                typeface = Typeface.MONOSPACE
+                setPadding(dp(8), 0, 0, 0)
+                setOnClickListener { copyText(sp.sourceItemId!!, "货源商品ID") }
+            })
+        }
+        head.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+        if (!sp.sourceUrl.isNullOrBlank()) {
+            head.addView(TextView(this).apply {
+                text = "打开货源"
+                setTextColor(Color.parseColor("#165dff"))
+                textSize = 10f
+                setRoundedBg(Color.parseColor("#e8f3ff"), 6f)
+                setPadding(dp(10), dp(4), dp(10), dp(4))
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { leftMargin = dp(8) }
+                setOnClickListener { openSourceUrl(sp.sourceUrl) }
+            })
+        }
+        card.addView(head)
+
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(6), 0, 0)
+        }
+        val img = ImageView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(44), dp(44)).apply { rightMargin = dp(8) }
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            setBackgroundColor(Color.parseColor("#f2f3f5"))
+        }
+        if (!sp.sourceImage.isNullOrBlank()) {
+            val u = if (sp.sourceImage.startsWith("/")) Api.BASE_URL + sp.sourceImage else sp.sourceImage
+            img.load(u)
+        }
+        if (!sp.sourceUrl.isNullOrBlank()) img.setOnClickListener { openSourceUrl(sp.sourceUrl) }
+        body.addView(img)
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        col.addView(TextView(this).apply {
+            text = sp.title ?: "—"
+            setTextColor(Color.parseColor("#1f2329"))
+            textSize = 12f
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+            if (!sp.sourceUrl.isNullOrBlank()) setOnClickListener { openSourceUrl(sp.sourceUrl) }
+        })
+        if (!sp.sourceSpec.isNullOrBlank()) {
+            col.addView(TextView(this).apply {
+                text = sp.sourceSpec
+                setTextColor(Color.parseColor("#86909c"))
+                textSize = 10f
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+            })
+        }
+        val meta = buildString {
+            append("最近采购 ").append(fmtMoney(sp.lastPrice))
+            append(" · ").append(sp.purchaseCount ?: 0).append("次")
+            if (!sp.lastPurchaseAt.isNullOrBlank()) append(" · ").append(fmtTime(sp.lastPurchaseAt))
+            val ratio = sp.quantityRatio ?: 1.0
+            if (ratio != 1.0) append(" · 配比 1:").append(fmtNum(ratio))
+        }
+        col.addView(TextView(this).apply {
+            text = meta
+            setTextColor(Color.parseColor("#4e5969"))
+            textSize = 10f
+            setPadding(0, dp(2), 0, 0)
+        })
+        val seller = listOfNotNull(
+            sp.sellerName?.takeIf { it.isNotBlank() },
+            sp.buyerAccount?.takeIf { it.isNotBlank() }
+        ).joinToString(" / ")
+        if (seller.isNotBlank()) {
+            col.addView(TextView(this).apply {
+                text = seller
+                setTextColor(Color.parseColor("#86909c"))
+                textSize = 10f
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+            })
+        }
+        body.addView(col)
+        card.addView(body)
+        return card
+    }
+
+    private fun supplierPlatformColors(platform: String?): Pair<Int, Int> = when (platform) {
+        "1688" -> Color.parseColor("#d97706") to Color.parseColor("#fff7e6")
+        "yangkeduo" -> Color.parseColor("#e02e24") to Color.parseColor("#ffece8")
+        "taobao" -> Color.parseColor("#ff5000") to Color.parseColor("#fff1e8")
+        "xianyu" -> Color.parseColor("#b45309") to Color.parseColor("#fffbe6")
+        else -> Color.parseColor("#165dff") to Color.parseColor("#eef4ff")
+    }
+
+    private fun openSourceUrl(url: String?) {
+        if (url.isNullOrBlank()) return
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        } catch (e: Exception) {
+            toast("无法打开货源链接")
         }
     }
 

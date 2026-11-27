@@ -502,7 +502,10 @@ onBeforeUnmount(() => stopMissingSyncPoll());
           <tr v-for="row in sources" :key="row.id">
             <td>
               <div class="goods-cell">
-                <img v-if="row.product?.image" :src="row.product.image" class="goods-img" referrerpolicy="no-referrer" loading="lazy" alt="" />
+                <div v-if="row.product?.image" class="img-hover-wrap">
+                  <img :src="row.product.image" class="goods-img" referrerpolicy="no-referrer" loading="lazy" alt="" />
+                  <img class="img-preview" :src="row.product.image" referrerpolicy="no-referrer" loading="lazy" alt="" />
+                </div>
                 <div v-else class="goods-img goods-img-empty"></div>
                 <div class="goods-info">
                   <span class="goods-name" :title="row.product?.name">{{ row.product?.name || '—' }}</span>
@@ -513,7 +516,10 @@ onBeforeUnmount(() => stopMissingSyncPoll());
             </td>
             <td>
               <div class="goods-cell">
-                <img v-if="row.sourceImage" :src="row.sourceImage" class="goods-img" referrerpolicy="no-referrer" loading="lazy" alt="" />
+                <div v-if="row.sourceImage" class="img-hover-wrap">
+                  <img :src="row.sourceImage" class="goods-img" referrerpolicy="no-referrer" loading="lazy" alt="" />
+                  <img class="img-preview" :src="row.sourceImage" referrerpolicy="no-referrer" loading="lazy" alt="" />
+                </div>
                 <div v-else class="goods-img goods-img-empty"></div>
                 <div class="goods-info">
                   <span class="goods-name-row">
@@ -579,7 +585,10 @@ onBeforeUnmount(() => stopMissingSyncPoll());
         </div>
         <div v-for="g in candidates" :key="g.ozonSku" class="cand-group">
           <div class="cand-head">
-            <img v-if="g.product?.image" :src="g.product.image" class="goods-img" referrerpolicy="no-referrer" loading="lazy" alt="" />
+            <div v-if="g.product?.image" class="img-hover-wrap">
+              <img :src="g.product.image" class="goods-img" referrerpolicy="no-referrer" loading="lazy" alt="" />
+              <img class="img-preview" :src="g.product.image" referrerpolicy="no-referrer" loading="lazy" alt="" />
+            </div>
             <div v-else class="goods-img goods-img-empty"></div>
             <div class="goods-info">
               <span class="goods-name" :title="g.product?.name">{{ g.product?.name || '—' }}</span>
@@ -596,7 +605,10 @@ onBeforeUnmount(() => stopMissingSyncPoll());
                 </td>
                 <td>
                   <div class="goods-cell">
-                    <img v-if="c.sourceImage" :src="c.sourceImage" class="goods-img" referrerpolicy="no-referrer" loading="lazy" alt="" />
+                    <div v-if="c.sourceImage" class="img-hover-wrap">
+                      <img :src="c.sourceImage" class="goods-img" referrerpolicy="no-referrer" loading="lazy" alt="" />
+                      <img class="img-preview" :src="c.sourceImage" referrerpolicy="no-referrer" loading="lazy" alt="" />
+                    </div>
                     <div v-else class="goods-img goods-img-empty"></div>
                     <div class="goods-info">
                       <span class="goods-name-row">
@@ -771,12 +783,31 @@ onBeforeUnmount(() => stopMissingSyncPoll());
 .mono { font-family: 'Courier New', monospace; }
 .muted { color: #86909c; font-size: 12px; }
 .goods-cell { display: flex; gap: 8px; align-items: flex-start; }
-.goods-img { width: 42px; height: 42px; border-radius: 4px; object-fit: cover; background: #f2f3f5; flex-shrink: 0; }
-.goods-img-empty { background: #f2f3f5; }
+/* 图片尺寸对齐订单处理页(120×120),悬浮右侧放大 280×280 */
+.goods-img { width: 120px; height: 120px; border-radius: 6px; object-fit: contain; background: #f9fafb; border: 1px solid #e5e7eb; flex-shrink: 0; }
+.goods-img-empty { background: #f2f3f5; border: 1px solid #e5e7eb; }
+.img-hover-wrap { position: relative; flex-shrink: 0; }
+.img-preview {
+  display: none;
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+  width: 280px;
+  height: 280px;
+  object-fit: contain;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+  z-index: 50;
+  pointer-events: none;
+}
+.img-hover-wrap:hover .img-preview { display: block; }
 .goods-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .goods-name-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .platform-tag { flex-shrink: 0; background: #eef4ff; color: #165dff; border-radius: 4px; padding: 0 6px; font-size: 11px; line-height: 18px; }
-.goods-name { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #1f2329; }
+.goods-name { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #1f2329; }
 .goods-name.link { color: #165dff; text-decoration: none; }
 .goods-name.link:hover { text-decoration: underline; }
 .goods-sub { color: #86909c; font-size: 12px; }
@@ -784,7 +815,7 @@ onBeforeUnmount(() => stopMissingSyncPoll());
 .tag-disabled { display: inline-block; background: #f2f3f5; color: #86909c; border-radius: 4px; padding: 1px 8px; font-size: 12px; margin-left: 4px; white-space: nowrap; }
 .warn-tag { display: inline-block; margin-top: 4px; color: #d97706; background: #fff7e6; border-radius: 4px; padding: 1px 6px; font-size: 11px; }
 .batch-bar { display: flex; align-items: center; gap: 8px; background: #eef4ff; color: #165dff; border-radius: 6px; padding: 8px 10px; margin-bottom: 10px; font-size: 13px; }
-.cand-group { border: 1px solid #e5e6eb; border-radius: 8px; margin-bottom: 12px; overflow: hidden; }
+.cand-group { border: 1px solid #e5e6eb; border-radius: 8px; margin-bottom: 12px; overflow: visible; }
 .cand-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #fafbfc; border-bottom: 1px solid #f2f3f5; }
 .cand-head .goods-info { flex: 1; }
 .cand-count { color: #86909c; font-size: 12px; white-space: nowrap; }

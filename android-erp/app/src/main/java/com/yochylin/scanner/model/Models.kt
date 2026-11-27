@@ -293,6 +293,28 @@ data class OrderDetail(
     val items: List<PkgItem>? = null,
     val purchaseLinks: List<PurchaseLink>? = null,
     val traces: List<Trace>? = null,
+    // 货源商品(2026-11-28):未采购订单详情展示已维护的货源,供采购参考
+    val supplierProducts: List<SupplierProduct>? = null,
+)
+
+/** 货源商品(op_supplier_product,2026-11-28) */
+data class SupplierProduct(
+    val id: Long = 0,
+    val ozonSku: Long? = null,
+    val platform: String? = null,
+    val sourceUrl: String? = null,
+    val sourceItemId: String? = null,
+    val sourceSkuId: String? = null,
+    val sourceSpec: String? = null,
+    val sourceImage: String? = null,
+    val title: String? = null,
+    val sellerName: String? = null,
+    val buyerAccount: String? = null,
+    val lastPrice: Double? = null,
+    val lastPurchaseAt: String? = null,
+    val purchaseCount: Int? = null,
+    val quantityRatio: Double? = null,
+    val isPrimary: Boolean? = null,
 )
 
 /** 同步订单返回 */

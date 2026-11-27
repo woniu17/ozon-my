@@ -738,6 +738,10 @@ router.get('/admin/api/order-process/detail/:id', (req, res, next) => {
       operateStatus: detail.package.operateStatus,
       rubCnyRate: rate,
     });
+    // 2026-11-28:详情页返回已维护货源(安卓未采购订单详情"货源商品"展示)
+    detail.supplierProducts = supplierProductsService.getSourcesForSkus(
+      (dItems.length ? dItems : detail.package.items || []).map((it) => it.sku)
+    );
     res.json(ok(detail));
   } catch (e) {
     next(e);

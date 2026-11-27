@@ -356,6 +356,39 @@ export function listCandidates({ storeId = '', keyword = '', platform = '', page
   return { items, total, page: pageNum, pageSize: size };
 }
 
+/** 按 Ozon SKU 批量取已维护货源(订单详情页"货源商品"展示用,2026-11-28)
+ *  仅返回启用中的货源,主货源在前、最近采购优先;图片统一重写为本地图床。
+ */
+export function getSourcesForSkus(skus = []) {
+  const list = [...new Set((skus || []).map((s) => Number(s)).filter((n) => Number.isInteger(n) && n > 0))];
+  if (!list.length) return [];
+  const rows = db
+    .prepare(
+      `SELECT * FROM op_supplier_product
+       WHERE enabled = 1 AND ozon_sku IN (${list.map(() => '?').join(',')})
+       ORDER BY is_primary DESC, COALESCE(last_purchase_at, gmt_modified, gmt_create) DESC, id DESC`
+    )
+    .all(...list);
+  return rows.map((r) => ({
+    id: r.id,
+    ozonSku: r.ozon_sku,
+    platform: r.platform,
+    sourceUrl: r.source_url || buildSourceUrl(r.platform, r.source_item_id),
+    sourceItemId: r.source_item_id || '',
+    sourceSkuId: r.source_sku_id || '',
+    sourceSpec: r.source_spec || '',
+    sourceImage: imageCacheUrlFor(r.source_image) || '',
+    title: r.title || '',
+    sellerName: r.seller_name || '',
+    buyerAccount: r.buyer_account || '',
+    lastPrice: r.last_price != null ? Number(r.last_price) : null,
+    lastPurchaseAt: r.last_purchase_at || '',
+    purchaseCount: r.purchase_count || 0,
+    quantityRatio: r.quantity_ratio != null ? Number(r.quantity_ratio) : 1,
+    isPrimary: !!r.is_primary,
+  }));
+}
+
 /** 单 SKU 货源详情:已维护货源 + 候选(含已存在标记) */
 export function getSkuDetail(sku) {
   const product = resolveOzonProduct(sku);
