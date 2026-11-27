@@ -146,6 +146,23 @@ function loadExistingKeys() {
   return set;
 }
 
+/** 用户已移除的候选键集合(与候选聚合同键口径) */
+function loadIgnoredKeys() {
+  const set = new Set();
+  const rows = db
+    .prepare(
+      `SELECT COALESCE(ozon_sku, 0) AS sku, platform,
+              COALESCE(source_item_id, '') AS gid, COALESCE(source_sku_id, '') AS sid,
+              COALESCE(source_spec, '') AS spec
+       FROM op_supplier_candidate_ignore`
+    )
+    .all();
+  for (const r of rows) {
+    set.add(sourceIdentityKey({ sku: r.sku, platform: r.platform, gid: r.gid, sid: r.sid, spec: r.spec }));
+  }
+  return set;
+}
+
 /**
  * 历史采购 → 货源候选聚合(1688 + 拼多多)
  * 每条 items_json 商品行(有非空 goodsId)生成候选,按身份键聚合:
@@ -309,12 +326,14 @@ export function listCandidates({ storeId = '', keyword = '', platform = '', page
   const pageNum = Math.max(1, Number(page) || 1);
   const size = Math.min(100, Math.max(1, Number(pageSize) || 20));
   const existing = loadExistingKeys();
+  const ignored = loadIgnoredKeys();
   const all = collectHistoryCandidates({ platform: platform || null });
   const groups = new Map();
   for (const c of all.values()) {
-    if (existing.has(sourceIdentityKey({
+    const key = sourceIdentityKey({
       sku: c.ozonSku, platform: c.platform, gid: c.sourceItemId, sid: c.sourceSkuId, spec: c.sourceSpec,
-    }))) continue;
+    });
+    if (existing.has(key) || ignored.has(key)) continue;
     let g = groups.get(c.ozonSku);
     if (!g) {
       g = { ozonSku: c.ozonSku, offerId: c.offerId, storeId: c.storeId, latestAt: '', candidates: [] };
@@ -409,13 +428,18 @@ export function getSkuDetail(sku) {
       }));
     }
   }
+  const ignored = loadIgnoredKeys();
   const candMap = collectHistoryCandidates({ sku });
-  const candidates = [...candMap.values()].map((c) => ({
-    ...c,
-    exists: existing.has(sourceIdentityKey({
+  const candidates = [...candMap.values()]
+    .filter((c) => !ignored.has(sourceIdentityKey({
       sku: c.ozonSku, platform: c.platform, gid: c.sourceItemId, sid: c.sourceSkuId, spec: c.sourceSpec,
-    })),
-  }));
+    })))
+    .map((c) => ({
+      ...c,
+      exists: existing.has(sourceIdentityKey({
+        sku: c.ozonSku, platform: c.platform, gid: c.sourceItemId, sid: c.sourceSkuId, spec: c.sourceSpec,
+      })),
+    }));
   candidates.sort((a, b) => (b.purchaseCount || 0) - (a.purchaseCount || 0));
   return { product: brief, sources, candidates };
 }
@@ -590,6 +614,15 @@ export function upsertSource(p = {}) {
     if (isPrimary) applyPrimary(id, storeId, ozonSku);
   }
   if (p.isPrimary === true && !created) applyPrimary(id, storeId, ozonSku);
+  // 货源已建立 → 清除同键的候选忽略记录(删除货源后可重新出现在候选中)
+  try {
+    db.prepare(
+      `DELETE FROM op_supplier_candidate_ignore
+       WHERE COALESCE(ozon_sku, 0) = ? AND platform = ?
+         AND COALESCE(source_item_id, '') = ? AND COALESCE(source_sku_id, '') = ?
+         AND COALESCE(source_spec, '') = ?`
+    ).run(ozonSku, platform, sourceItemId, sourceSkuId, sourceSpec);
+  } catch { /* 忽略表缺失时忽略 */ }
   return { id, created };
 }
 
@@ -642,6 +675,36 @@ export function setPrimary(id) {
   if (!row) throw new ApiError(ErrorCode.RESOURCE_NOT_FOUND, '货源不存在');
   applyPrimary(row.id, row.store_id, row.ozon_sku);
   return { id: row.id, isPrimary: true };
+}
+
+/** 移除待确认候选(2026-11-28):写入忽略表,不再出现在候选列表
+ *  后续同键货源被加入/自动积累时清除忽略记录(见 upsertSource)。
+ */
+export function dismissCandidates(items = []) {
+  const stmt = db.prepare(
+    `INSERT OR IGNORE INTO op_supplier_candidate_ignore
+       (store_id, ozon_sku, platform, source_item_id, source_sku_id, source_spec, ignored_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  );
+  const now = nowIso();
+  let removed = 0;
+  for (const it of items) {
+    const sku = Number(it?.ozonSku);
+    if (!Number.isInteger(sku) || sku <= 0) continue;
+    const platform = normalizeSourcePlatform(it.platform || '1688');
+    if (!SUPPORTED_SOURCE_PLATFORMS.has(platform)) continue;
+    const res = stmt.run(
+      String(it.storeId || ''),
+      sku,
+      platform,
+      String(it.sourceItemId || '').trim(),
+      String(it.sourceSkuId || '').trim(),
+      String(it.sourceSpec || '').trim(),
+      now
+    );
+    removed += res.changes;
+  }
+  return { removed };
 }
 
 /** 批量确认候选(人工确认后加入货源) */

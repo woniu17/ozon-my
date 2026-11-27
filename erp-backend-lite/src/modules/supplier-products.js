@@ -24,6 +24,7 @@ import {
   deleteSource,
   setPrimary,
   confirmCandidates,
+  dismissCandidates,
   backfillFromHistory,
   parseSourceItemId,
   buildSourceUrl,
@@ -111,6 +112,16 @@ router.post('/admin/api/supplier-products/confirm', (req, res, next) => {
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
     if (!items.length) return res.json(ok({ created: 0, updated: 0, errors: [] }));
     res.json(ok(confirmCandidates(items)));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// 移除待确认候选(2026-11-28):写入忽略表,不再出现在候选列表
+router.post('/admin/api/supplier-products/candidates/dismiss', (req, res, next) => {
+  try {
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    res.json(ok(dismissCandidates(items)));
   } catch (e) {
     next(e);
   }

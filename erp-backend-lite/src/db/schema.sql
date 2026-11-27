@@ -835,6 +835,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_op_sp_sku_source
 CREATE INDEX IF NOT EXISTS idx_op_sp_sku ON op_supplier_product(ozon_sku);
 CREATE INDEX IF NOT EXISTS idx_op_sp_store ON op_supplier_product(store_id);
 
+-- 待确认候选移除(2026-11-28):用户手动移除的候选货源,不再在待确认列表出现
+CREATE TABLE IF NOT EXISTS op_supplier_candidate_ignore (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  store_id        TEXT NOT NULL DEFAULT '',
+  ozon_sku        INTEGER NOT NULL,
+  platform        TEXT NOT NULL DEFAULT '1688',
+  source_item_id  TEXT NOT NULL DEFAULT '',
+  source_sku_id   TEXT NOT NULL DEFAULT '',
+  source_spec     TEXT NOT NULL DEFAULT '',
+  ignored_at      TEXT,
+  UNIQUE(store_id, ozon_sku, platform, source_item_id, source_sku_id, source_spec)
+);
+CREATE INDEX IF NOT EXISTS idx_op_sp_ignore_sku ON op_supplier_candidate_ignore(ozon_sku);
+
 -- 国内物流轨迹(上家→我)
 CREATE TABLE IF NOT EXISTS op_logistics_trace (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -41,6 +41,11 @@ export function confirmSupplierCandidates(items) {
   return request.post('/admin/api/supplier-products/confirm', { items });
 }
 
+/** 移除待确认候选(不再出现在候选列表) */
+export function dismissSupplierCandidates(items) {
+  return request.post('/admin/api/supplier-products/candidates/dismiss', { items });
+}
+
 /** 历史采购回填(仅无歧义单) */
 export function backfillSupplierProducts() {
   return request.post('/admin/api/supplier-products/backfill', {});

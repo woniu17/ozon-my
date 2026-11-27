@@ -17,6 +17,7 @@ import {
   deleteSupplierProduct,
   setSupplierPrimary,
   confirmSupplierCandidates,
+  dismissSupplierCandidates,
   backfillSupplierProducts,
   syncMissingGoods,
   getMissingGoodsSyncStatus,
@@ -397,6 +398,28 @@ function confirmSelected() {
   confirmBatch(picked);
 }
 
+// 移除候选(2026-11-28):不再出现在待确认列表
+async function dismissBatch(items) {
+  if (!items || !items.length) return;
+  if (!window.confirm(`确认移除 ${items.length} 个候选货源?移除后不再出现在待确认候选。`)) return;
+  try {
+    const r = await dismissSupplierCandidates(items.map(payloadOf));
+    const d = r?.data || r || {};
+    show(`已移除 ${d.removed ?? items.length} 个候选`, 'success');
+    await loadCandidates();
+    await refreshCounts();
+  } catch (e) {
+    show(e.message || String(e), 'error');
+  }
+}
+
+function dismissSelected() {
+  const all = candidates.value.flatMap((g) => g.candidates);
+  const picked = all.filter((c) => isSelected(c));
+  if (!picked.length) return;
+  dismissBatch(picked);
+}
+
 // ── 工具 ──
 function fmtMoney(v) {
   if (v == null || v === '') return '—';
@@ -582,6 +605,7 @@ onBeforeUnmount(() => stopMissingSyncPoll());
         <div v-if="selectedCount" class="batch-bar">
           已选 {{ selectedCount }} 个候选
           <button class="btn btn-primary btn-sm" @click="confirmSelected">确认加入货源</button>
+          <button class="btn btn-danger btn-sm" @click="dismissSelected">移除所选</button>
         </div>
         <div v-for="g in candidates" :key="g.ozonSku" class="cand-group">
           <div class="cand-head">
@@ -596,6 +620,7 @@ onBeforeUnmount(() => stopMissingSyncPoll());
             </div>
             <span class="cand-count">{{ g.candidateCount }} 个候选</span>
             <button class="btn btn-ghost btn-sm" @click="confirmBatch(g.candidates)">全部加入</button>
+            <button class="btn btn-danger btn-sm" @click="dismissBatch(g.candidates)">全部移除</button>
           </div>
           <table class="sp-table inner">
             <tbody>
@@ -644,6 +669,7 @@ onBeforeUnmount(() => stopMissingSyncPoll());
                 </td>
                 <td class="ops">
                   <button class="btn btn-primary btn-sm" @click="confirmBatch([c])">加入货源</button>
+                  <button class="btn btn-danger btn-sm" @click="dismissBatch([c])">移除</button>
                 </td>
               </tr>
             </tbody>
