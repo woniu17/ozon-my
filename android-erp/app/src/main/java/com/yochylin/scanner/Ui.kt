@@ -396,12 +396,14 @@ fun Context.showStyledConfirmDialog(
     message: CharSequence? = null,
     confirmText: String = "确定",
     cancelText: String = "取消",
+    onCancel: (() -> Unit)? = null,
     onConfirm: () -> Unit,
 ) {
     val density = resources.displayMetrics.density
     fun dp(v: Int) = (v * density + 0.5f).toInt()
 
     lateinit var dialog: Dialog
+    var confirmed = false
     val titleTv = TextView(this).apply {
         text = title
         textSize = 17f
@@ -440,6 +442,7 @@ fun Context.showStyledConfirmDialog(
         setPadding(dp(26), dp(9), dp(26), dp(9))
         setRoundedBg(0xFF165DFF.toInt(), 9f)
         setOnClickListener {
+            confirmed = true
             dialog.dismiss()
             onConfirm()
         }
@@ -474,6 +477,8 @@ fun Context.showStyledConfirmDialog(
     dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
     dialog.setContentView(root)
     dialog.setCanceledOnTouchOutside(true)
+    // 取消按钮/点击外部/返回键:未确认时回调 onCancel
+    dialog.setOnDismissListener { if (!confirmed) onCancel?.invoke() }
     dialog.window?.apply {
         setBackgroundDrawable(GradientDrawable().apply {
             setColor(Color.WHITE)

@@ -2528,15 +2528,23 @@ class PurchaseActivity : ComponentActivity() {
         }
     }
 
+    /** 统一风格二次确认(2026-11-28):拼单提示/入库确认等与订单详情弹窗同款 */
     private suspend fun showConfirmDialog(title: String, msg: String, confirm: String): Boolean {
         return suspendCancellableCoroutine { cont ->
-            AlertDialog.Builder(this)
-                .setTitle(title)
-                .setMessage(msg)
-                .setPositiveButton(confirm) { _, _ -> cont.resume(true) }
-                .setNegativeButton("取消") { _, _ -> cont.resume(false) }
-                .setOnCancelListener { cont.resume(false) }
-                .show()
+            var answered = false
+            fun answer(v: Boolean) {
+                if (answered) return
+                answered = true
+                if (cont.isActive) cont.resume(v)
+            }
+            showStyledConfirmDialog(
+                title = title,
+                message = msg,
+                confirmText = confirm,
+                cancelText = "取消",
+                onConfirm = { answer(true) },
+                onCancel = { answer(false) },
+            )
         }
     }
 
