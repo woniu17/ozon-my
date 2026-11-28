@@ -907,6 +907,7 @@ fun platformLabel(p: String?): String = when (p) {
     "pdd" -> "拼多多"
     "yangkeduo" -> "拼多多"
     "taobao" -> "淘宝"
+    "xianyu", "goofish" -> "咸鱼" // 2026-11-28:平台显示名统一为「咸鱼」
     "other" -> "手工(其他)"
     else -> p ?: "—"
 }
