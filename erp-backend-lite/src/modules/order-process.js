@@ -1105,9 +1105,9 @@ router.post('/admin/api/order-process/purchase-alloc', (req, res, next) => {
   }
 });
 
-// ── 手动录入/修改采购单国内物流单号(2026-09-20,闲鱼等无物流接口平台)──
+// ── 手动录入/修改采购单国内物流单号(2026-09-20,咸鱼等无物流接口平台)──
 // body: { purchaseOrderId, logisticsNo, logisticsCompany? }
-// 闲鱼列表接口不返回物流单号,卖家发货后用户从闲鱼订单/聊天复制单号手动录入;
+// 咸鱼列表接口不返回物流单号,卖家发货后用户从咸鱼订单/聊天复制单号手动录入;
 // 状态联动 wait_send/wait_pay→shipped,关联包裹头程物流空值补齐;详见 DAO 注释
 router.post('/admin/api/order-process/purchase-logistics', (req, res, next) => {
   try {

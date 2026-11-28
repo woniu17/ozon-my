@@ -17,7 +17,7 @@
 //   妙手同步的采购单轨迹仍由妙手侧更新;本轮询器同字段写入,双路并存最新覆盖。
 // 限速:请求间隔 2s,连续失败 3 次中止本轮(防触发反爬/雪崩);单轮每阶段上限 100 单。
 // 阶段B-TB(2026-09-22):淘宝拉轨迹(buyertrade transit_step.do,按订单号查,响应自带单号/公司)
-// 阶段B-XY(2026-11-01):闲鱼拉轨迹(菜鸟 mtop 接口,按订单号查,响应自带单号/公司;与淘宝同口径)
+// 阶段B-XY(2026-11-01):咸鱼拉轨迹(菜鸟 mtop 接口,按订单号查,响应自带单号/公司;与淘宝同口径)
 // 断点续跑(2026-10-29):轮次执行前把当前阶段写 app_config(purchase_logistics_resume),
 //   进程若在轮次中途被重启,重启后检测到断点立即从该阶段继续,不必整轮重扫;
 //   正常完成才清除断点。阶段内部按原 SQL 扫描,已完成订单会被条件自然过滤(单号已回填/
@@ -394,7 +394,7 @@ async function phaseFetchTaobaoTrace() {
   return { scanned: rows.length, updated, skippedNoAccount };
 }
 
-/** 阶段B-XY(2026-11-01):闲鱼拉完整轨迹(菜鸟 mtop 接口,按订单号查)
+/** 阶段B-XY(2026-11-01):咸鱼拉完整轨迹(菜鸟 mtop 接口,按订单号查)
  *  接口按订单号查询,无需先有快递单号;响应自带 mailNo(单号)/companyName(公司),一并回填。
  *  未发货/未揽收返回空轨迹 → 推进 last_trace_at 避免空转。
  *  不做签收升级:是否签收以轨迹节点文本为准(与淘宝/PDD 口径一致,前端展开可见) */
@@ -426,13 +426,13 @@ async function phaseFetchXianyuTrace() {
       } else if (trackingNumber && trackingNumber !== r.logistics_no) {
         writeChangedLogisticsNo(r.id, trackingNumber, shippingName);
         logger.info({ purchaseSn: r.purchase_sn, oldNo: r.logistics_no, newNo: trackingNumber },
-          '[purchase-logistics-poller] 阶段B-XY:检测到闲鱼单号变更,已覆盖');
+          '[purchase-logistics-poller] 阶段B-XY:检测到咸鱼单号变更,已覆盖');
       }
       if (steps.length) {
         writeTraceRow(r.id, steps, shippingName);
         updated++;
         logger.info({ purchaseSn: r.purchase_sn, steps: steps.length, shippingName, trackingNumber },
-          '[purchase-logistics-poller] 阶段B-XY:拉取闲鱼轨迹');
+          '[purchase-logistics-poller] 阶段B-XY:拉取咸鱼轨迹');
       } else {
         // 无轨迹(未发货/未揽收):推进 last_trace_at 避免空转
         db.prepare(`UPDATE op_purchase_order SET last_trace_at = datetime('now', 'localtime') WHERE id = ?`).run(r.id);
@@ -717,7 +717,7 @@ function writeChangedLogisticsNo(id, newNo, company) {
  *  1688:补单号(缺时 getLogisticsForOrder)→ 拉轨迹(getTraceForOrder)
  *  拼多多:补单号(缺时 searchPddOrder)→ 拉轨迹(getPddTrace,顺带回填缺失公司名)
  *  淘宝(2026-09-22):拉轨迹(getTaobaoTrace,按订单号查,顺带回填缺失单号/公司名)
- *  闲鱼(2026-11-01):拉轨迹(getXianyuTrace,按订单号查,顺带回填缺失单号/公司名)
+ *  咸鱼(2026-11-01):拉轨迹(getXianyuTrace,按订单号查,顺带回填缺失单号/公司名)
  *  其他平台/手工单:暂无可用接口,计入 skip
  *  @returns {{ orders: number, results: Array<{purchaseSn, platform, action, detail}> }} */
 async function syncPurchaseLogisticsForPackage(packageId) {
@@ -832,11 +832,11 @@ async function syncPurchaseLogisticsForPackage(packageId) {
         }
         results.push({ purchaseSn: o.purchaseSn, platform: o.platform, action: 'trace', detail: (filled ? '已补单号,' : '') + changedNo + writeTraceRow(o.id, steps, shippingName) });
       } else if (o.platform === 'xianyu') {
-        // 闲鱼(2026-11-01):菜鸟 mtop 按订单号查询,无需先有快递单号;
+        // 咸鱼(2026-11-01):菜鸟 mtop 按订单号查询,无需先有快递单号;
         // 响应自带 trackingNumber(单号)/shippingName(公司),一并回填(与淘宝同款处理)
         const account = xianyuAccounts.includes(o.buyerAccount) ? o.buyerAccount : xianyuAccounts[0];
         if (!account) {
-          results.push({ purchaseSn: o.purchaseSn, platform: o.platform, action: 'skip', detail: '未配置闲鱼账号' });
+          results.push({ purchaseSn: o.purchaseSn, platform: o.platform, action: 'skip', detail: '未配置咸鱼账号' });
           continue;
         }
         const { steps, shippingName, trackingNumber } = await getXianyuTrace(o.purchaseSn, account);

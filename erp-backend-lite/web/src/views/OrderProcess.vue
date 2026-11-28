@@ -233,7 +233,7 @@ const PLATFORMS = [
   { value: '1688', label: '1688' },
   { value: 'yangkeduo', label: '拼多多' },
   { value: 'taobao', label: '淘宝' },
-  { value: 'xianyu', label: '闲鱼' },
+  { value: 'xianyu', label: '咸鱼' },
 ];
 
 // ── 详情弹窗 ───────────────────────────────────────────
@@ -594,7 +594,7 @@ function enrichStop() { enrichStopFlag = true; }
 
 // 构建补全确认弹窗的 message:展示按平台分组的采购订单号列表(前 20 条 + 更多提示)
 function buildEnrichConfirmMessage(pending, platforms) {
-  const platformLabels = { yangkeduo: '拼多多', '1688': '1688', taobao: '淘宝', xianyu: '闲鱼' };
+  const platformLabels = { yangkeduo: '拼多多', '1688': '1688', taobao: '淘宝', xianyu: '咸鱼' };
   const lines = [];
   lines.push(`检测到 ${pending.length} 条待补全采购单(${platforms.join('+')},全量,不限当前页)。`);
   lines.push(`将逐个搜索补全商品图/数量/卖家信息,每单间隔 ${ENRICH_INTERVAL_MS / 1000}s 限速,连续失败 ${ENRICH_MAX_CONSEC_FAIL} 次自动中止。`);
@@ -636,7 +636,7 @@ async function onEnrichPurchaseItems() {
     if (pddList.length) platforms.push('拼多多');
     if (aliList.length) platforms.push('1688');
     if (tbList.length) platforms.push('淘宝');
-    if (xyList.length) platforms.push('闲鱼');
+    if (xyList.length) platforms.push('咸鱼');
   } catch (e) {
     show('拉取待补全列表失败:' + (e.message || e), 'error');
     return;
@@ -668,7 +668,7 @@ async function onEnrichPurchaseItems() {
     return;
   }
   if (needXy && !platformAnyLogin('xianyu')) {
-    show('闲鱼补全需要先登录:请运行 qxqx 的 persistent(账号参数)登录闲鱼(goofish.com)后重试', 'warning');
+    show('咸鱼补全需要先登录:请运行 qxqx 的 persistent(账号参数)登录咸鱼(goofish.com)后重试', 'warning');
     return;
   }
   if (!await confirmStore.ask({
@@ -1530,14 +1530,14 @@ const PLATFORM_TAB_META = {
   pdd: { prefix: 'pdd', platformVal: 'yangkeduo', label: '拼多多', platformReq: 'pdd' },
   ali1688: { prefix: 'ali', platformVal: '1688', label: '1688', platformReq: 'ali1688' },
   taobao: { prefix: 'taobao', platformVal: 'taobao', label: '淘宝', platformReq: 'taobao' },
-  xianyu: { prefix: 'xianyu', platformVal: 'xianyu', label: '闲鱼', platformReq: 'xianyu' },
+  xianyu: { prefix: 'xianyu', platformVal: 'xianyu', label: '咸鱼', platformReq: 'xianyu' },
 };
 // 默认(后端 /status 未返回时):各平台一个主账号,行为与 M3 完全一致
 const importAccountTabs = ref([
   { key: 'pdd', platform: 'pdd', account: 'linqx', label: '拼多多' },
   { key: 'ali:linqx', platform: 'ali1688', account: 'linqx', label: '1688·linqx' },
   { key: 'taobao', platform: 'taobao', account: 'linqx', label: '淘宝' },
-  { key: 'xianyu', platform: 'xianyu', account: 'linqx', label: '闲鱼' },
+  { key: 'xianyu', platform: 'xianyu', account: 'linqx', label: '咸鱼' },
 ]);
 
 /** 按 /status 返回的各平台账号列表展开 tab 配置 */
@@ -1768,7 +1768,7 @@ const importSubTab = computed({
 const importSubTabs = computed(() => {
   const p = currentTabDef.value?.platform || '';
   if (p === 'pdd') return [{ key: 'all', label: '全部' }, { key: 'unreceived', label: '待收货' }];
-  // 闲鱼列表接口 orderStatus 仅支持全量(其它值被服务端忽略),只留"全部"
+  // 咸鱼列表接口 orderStatus 仅支持全量(其它值被服务端忽略),只留"全部"
   if (p === 'xianyu') return [{ key: 'all', label: '全部' }];
   return [{ key: 'all', label: '全部' }, { key: 'unshipped', label: '待发货' }, { key: 'unreceived', label: '待收货' }];
 });
@@ -1936,7 +1936,7 @@ function toggleRemovedPurchase(po) {
   removedPurchaseIds.value = s;
 }
 
-// ── 已有采购单手动录入/修改国内物流单号(2026-09-20,闲鱼等无物流接口平台)──
+// ── 已有采购单手动录入/修改国内物流单号(2026-09-20,咸鱼等无物流接口平台)──
 // 采购弹窗「已选采购订单区」已有单行的独立操作:即时生效,不随弹窗「保存」
 // 后端联动:wait_send/wait_pay→shipped + 关联包裹头程物流空值补齐
 const COURIER_OPTIONS = ['顺丰速运', '中通快递', '圆通速递', '韵达快递', '申通快递', '极兔速递', '邮政快递包裹', '京东物流', '德邦物流', 'EMS'];
@@ -2481,7 +2481,7 @@ async function onSyncPackage(pkg) {
 // 范围:该包裹全部关联采购单——补物流单号(1688官方API/拼多多搜索)+拉最新轨迹;
 // 与顶栏全局按钮互补:全局走后台整轮(每小时同逻辑),本按钮即时同步当前包裹
 const logisticsPkgId = ref(0); // 正在同步采购物流的包裹 id(按钮 loading)
-const PLATFORM_SHORT = { '1688': '1688', yangkeduo: '拼多多', taobao: '淘宝', xianyu: '闲鱼', other: '手工' };
+const PLATFORM_SHORT = { '1688': '1688', yangkeduo: '拼多多', taobao: '淘宝', xianyu: '咸鱼', other: '手工' };
 async function onSyncPackageLogistics(pkg) {
   if (logisticsPkgId.value) return;
   logisticsPkgId.value = pkg.id;
@@ -4729,14 +4729,14 @@ onUnmounted(() => {
                 <span v-else class="po-logi-empty">平台未带物流单号</span>
               </div>
 
-              <!-- 国内物流(已有单):公司+单号+录入/修改入口(闲鱼等无物流接口平台的独立补录操作,即时生效) -->
+              <!-- 国内物流(已有单):公司+单号+录入/修改入口(咸鱼等无物流接口平台的独立补录操作,即时生效) -->
               <div v-if="o._existing" class="po-card-logi">
                 <div v-if="o.trackingNumber" class="po-logi">
                   <span class="po-logi-company">{{ o.poLogisticsCompany }}</span>
                   <a :href="trackingSearchUrl(o.poLogisticsCompany, o.trackingNumber)" target="_blank" rel="noopener" class="order-link mono" title="百度搜索物流状态">{{ o.trackingNumber }}</a>
                 </div>
                 <div v-else class="po-logi-empty">未录物流单号</div>
-                <button class="btn btn-ghost btn-sm" :title="o.trackingNumber ? '修改该采购单的国内物流单号' : '手动录入国内物流单号(闲鱼等平台接口拿不到单号时用)'" @click="openPoLogistics(o)">{{ o.trackingNumber ? '修改' : '录入' }}</button>
+                <button class="btn btn-ghost btn-sm" :title="o.trackingNumber ? '修改该采购单的国内物流单号' : '手动录入国内物流单号(咸鱼等平台接口拿不到单号时用)'" @click="openPoLogistics(o)">{{ o.trackingNumber ? '修改' : '录入' }}</button>
               </div>
 
               <!-- 底部操作(与 H5 采购信息卡 po-actions 同构):已有单 删除/恢复,新单 移除 -->
@@ -4786,11 +4786,11 @@ onUnmounted(() => {
       </div>
     </AppModal>
 
-    <!-- 已有采购单物流单号录入弹窗(闲鱼等无物流接口平台,即时生效) -->
+    <!-- 已有采购单物流单号录入弹窗(咸鱼等无物流接口平台,即时生效) -->
     <AppModal :open="poLogistics.open" :title="`国内物流 · ${poLogistics.purchaseSn}`" @update:open="poLogistics.open = $event">
       <div class="po-logi-form">
         <div class="sync-all-tip">
-          闲鱼等平台的物流单号接口拿不到,从平台订单/聊天中复制后在此录入;保存后采购单流转「已发货」。
+          咸鱼等平台的物流单号接口拿不到,从平台订单/聊天中复制后在此录入;保存后采购单流转「已发货」。
         </div>
         <div class="sync-all-date-row">
           <label>物流单号</label>

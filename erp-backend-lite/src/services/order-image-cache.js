@@ -33,7 +33,7 @@ const ALLOWED_HOST_SUFFIXES = [
   'ozonstatic.cn',
   'ozone.ru',
   'ozonstatic.ru',
-  // 1688 / 淘宝 / 闲鱼(同属阿里 CDN)
+  // 1688 / 淘宝 / 咸鱼(同属阿里 CDN)
   'alicdn.com',
   'taobaocdn.com',
   'tbcdn.cn',
@@ -43,7 +43,7 @@ const ALLOWED_HOST_SUFFIXES = [
   'yangkeduo.com',
   'pddpic.com',
   'pddugc.com',
-  // 闲鱼
+  // 咸鱼
   'goofish.com',
   'idlefish.com',
 ];

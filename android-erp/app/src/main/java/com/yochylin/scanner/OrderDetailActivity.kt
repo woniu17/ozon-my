@@ -317,7 +317,7 @@ class OrderDetailActivity : ComponentActivity() {
         }
     }
 
-    /** 渲染货源商品卡(2026-11-28):未采购订单展示已维护货源(1688/拼多多/淘宝/闲鱼),供录采购参考 */
+    /** 渲染货源商品卡(2026-11-28):未采购订单展示已维护货源(1688/拼多多/淘宝/咸鱼),供录采购参考 */
     private fun renderSupplierSources(list: List<SupplierProduct>?) {
         dSupplierSourceContainer.removeAllViews()
         if (links.isNotEmpty() || list.isNullOrEmpty()) {
@@ -456,10 +456,8 @@ class OrderDetailActivity : ComponentActivity() {
             textSize = 10f
             setPadding(0, dp(2), 0, 0)
         })
-        val seller = listOfNotNull(
-            sp.sellerName?.takeIf { it.isNotBlank() },
-            sp.buyerAccount?.takeIf { it.isNotBlank() }
-        ).joinToString(" / ")
+        // 2026-11-28: 货源商品卡只展示供应商,不再展示采购买家账号
+        val seller = sp.sellerName?.takeIf { it.isNotBlank() }.orEmpty()
         if (seller.isNotBlank()) {
             col.addView(TextView(this).apply {
                 text = seller
@@ -523,7 +521,7 @@ class OrderDetailActivity : ComponentActivity() {
      * 平台 → 商品详情候选 deep link 列表 + 浏览器兜底 URL(拼多多已在 openSourceProduct 单独处理)
      * - 1688: wireless1688 plugin 包装(与订单拉起同款) → https 换 scheme 两种写法
      * - 淘宝: dps:// (分享协议) → tbopen:// → taobao://item
-     * - 闲鱼: fleamarket://item?id= (官方唤端格式)
+     * - 咸鱼: fleamarket://item?id= (官方唤端格式)
      */
     private fun sourceProductDeepLinks(platform: String?, itemId: String?, webUrl: String?): Pair<List<String>, String?> {
         val id = itemId?.trim().orEmpty()
@@ -546,7 +544,7 @@ class OrderDetailActivity : ComponentActivity() {
                     "taobao://item.taobao.com/item.htm?id=$id"
                 ) to itemUrl
             }
-            "xianyu", "闲鱼", "goofish" -> listOf(
+            "xianyu", "咸鱼", "goofish" -> listOf(
                 "fleamarket://item?id=$id",
                 "fleamarket://2.taobao.com/onepiece?itemId=$id"
             ) to web.ifBlank { "https://www.goofish.com/item?id=$id" }
@@ -1765,7 +1763,7 @@ class OrderDetailActivity : ComponentActivity() {
                 "https://detail.1688.com/offer/1.html",
                 "https://air.1688.com/app/ctf-page/trade-order-list/buyer-order-list.html?word=$testSn"
             )),
-            Triple("闲鱼", "com.taobao.idlefish", listOf(
+            Triple("咸鱼", "com.taobao.idlefish", listOf(
                 "fleamarket://",
                 "fleamarket://item?id=1063009424954",
                 "fleamarket://2.taobao.com/onepiece?itemId=1063009424954",

@@ -480,7 +480,7 @@ class PrePurchaseFragment : Fragment() {
         "pdd", "yangkeduo" -> "拼多多"
         "ali1688", "1688" -> "1688"
         "taobao" -> "淘宝"
-        "xianyu" -> "闲鱼"
+        "xianyu" -> "咸鱼"
         "other" -> "手工"
         else -> p ?: "—"
     }

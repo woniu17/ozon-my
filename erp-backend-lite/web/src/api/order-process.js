@@ -51,7 +51,7 @@ export function updatePurchaseAlloc(body) {
   return request.post('/admin/api/order-process/purchase-alloc', body);
 }
 
-// 手动录入/修改采购单国内物流单号(闲鱼等无物流接口平台)
+// 手动录入/修改采购单国内物流单号(咸鱼等无物流接口平台)
 // body: { purchaseOrderId, logisticsNo, logisticsCompany? };状态联动 wait_send→shipped
 export function updatePurchaseLogistics(body) {
   return request.post('/admin/api/order-process/purchase-logistics', body);
@@ -248,7 +248,7 @@ export function syncMsToLocal(packageIds) {
   return request.post('/admin/api/order-process/sync-ms-to-local', body);
 }
 
-// 补全采购订单商品信息(支持拼多多+1688+淘宝+闲鱼)
+// 补全采购订单商品信息(支持拼多多+1688+淘宝+咸鱼)
 // 2026-10-27:items 可带 sellerName,搜索补全时一并回填卖家名(手动录入单只写商品图不落卖家名)
 // body: { items: [{ purchaseSn, platform, sellerName?, goods: [{goodsName, spec, price, number, thumbUrl}] }] }
 export function enrichPurchaseItems(items) {

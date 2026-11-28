@@ -305,7 +305,7 @@
                     android:textStyle="bold"
                     android:textColor="#4e5969" />
 
-                <!-- 货源商品(2026-11-28):未采购订单展示已维护货源(1688/拼多多/淘宝/闲鱼),供采购参考 -->
+                <!-- 货源商品(2026-11-28):未采购订单展示已维护货源(1688/拼多多/淘宝/咸鱼),供采购参考 -->
                 <LinearLayout
                     android:id="@+id/dSupplierSourceContainer"
                     android:layout_width="match_parent"

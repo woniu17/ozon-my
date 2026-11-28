@@ -247,7 +247,7 @@ class PurchaseActivity : ComponentActivity() {
         "yangkeduo", "pdd" -> "拼多多"
         "1688", "ali1688" -> "1688"
         "taobao" -> "淘宝"
-        "xianyu" -> "闲鱼"
+        "xianyu" -> "咸鱼"
         "other" -> "手工(其他)"
         else -> p ?: "—"
     }
@@ -1136,7 +1136,7 @@ class PurchaseActivity : ComponentActivity() {
                     "pdd" to ("yangkeduo" to "拼多多"),
                     "ali1688" to ("1688" to "1688"),
                     "taobao" to ("taobao" to "淘宝"),
-                    "xianyu" to ("xianyu" to "闲鱼")
+                    "xianyu" to ("xianyu" to "咸鱼")
                 )
                 val newTabs = mutableListOf<PlatformTab>()
                 for ((platform, m) in meta) {
@@ -1916,7 +1916,7 @@ class PurchaseActivity : ComponentActivity() {
             PlatformTab("pdd", "pdd", "yangkeduo", "linqx", "拼多多"),
             PlatformTab("ali:linqx", "ali1688", "1688", "linqx", "1688·linqx"),
             PlatformTab("taobao", "taobao", "taobao", "linqx", "淘宝"),
-            PlatformTab("xianyu", "xianyu", "xianyu", "linqx", "闲鱼")
+            PlatformTab("xianyu", "xianyu", "xianyu", "linqx", "咸鱼")
         )
     }
 

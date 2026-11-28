@@ -4,7 +4,7 @@
 //   - 拼多多:分页拉取全部订单(offset 游标),一次覆盖全部缺失单号,避免逐单搜索(逐单需开详情页取优惠,慢)
 //   - 1688:按单号搜索(官方 OpenAPI buyerView,约 1.5s/单,限速)
 //   - 淘宝:按单号搜索(浏览器 mtop,约 2s/单,限速)
-//   - 闲鱼:按单号搜索(浏览器列表翻页比对,约 2s/单,限速)
+//   - 咸鱼:按单号搜索(浏览器列表翻页比对,约 2s/单,限速)
 // 任务在进程内后台执行,状态通过 /sync-missing-goods-status 轮询;同一时间只允许一个任务。
 import { db } from '../db/index.js';
 import { enrichPurchaseItems } from '../db/dao/sqlite/order-daos.js';
@@ -213,7 +213,7 @@ function syncTaobao() {
 function syncXianyu() {
   return syncByOrderSearch({
     platform: 'xianyu',
-    label: '闲鱼',
+    label: '咸鱼',
     accounts: config.platformAccounts.xianyu || [],
     searchFn: searchXianyuOrder,
     intervalMs: 2000, // 列表翻页比对单号,直接走浏览器

@@ -31,7 +31,7 @@ class PrePurchaseCreateActivity : ComponentActivity() {
         PlatformMeta("pdd", "pdd", "拼多多"),
         PlatformMeta("ali1688", "ali", "1688"),
         PlatformMeta("taobao", "taobao", "淘宝"),
-        PlatformMeta("xianyu", "xianyu", "闲鱼"),
+        PlatformMeta("xianyu", "xianyu", "咸鱼"),
     )
 
     private var currentPlatform = "pdd"

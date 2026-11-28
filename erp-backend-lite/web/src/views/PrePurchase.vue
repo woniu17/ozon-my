@@ -232,7 +232,7 @@ const TABS = [
   { key: 'pending', label: '待收货' },
   { key: 'received', label: '签收' },
 ];
-const PLATFORM_LABEL = { pdd: '拼多多', yangkeduo: '拼多多', ali1688: '1688', '1688': '1688', taobao: '淘宝', xianyu: '闲鱼', other: '手工' };
+const PLATFORM_LABEL = { pdd: '拼多多', yangkeduo: '拼多多', ali1688: '1688', '1688': '1688', taobao: '淘宝', xianyu: '咸鱼', other: '手工' };
 function platformLabel(p) { return PLATFORM_LABEL[p] || p || '—'; }
 function fmtMoney(v) { return v == null || v === '' ? '—' : '¥' + Number(v).toFixed(2); }
 function fmtTime(t) {
@@ -327,14 +327,14 @@ const PLATFORM_META = {
   pdd: { prefix: 'pdd', platform: 'pdd', label: '拼多多' },
   ali1688: { prefix: 'ali', platform: 'ali1688', label: '1688' },
   taobao: { prefix: 'taobao', platform: 'taobao', label: '淘宝' },
-  xianyu: { prefix: 'xianyu', platform: 'xianyu', label: '闲鱼' },
+  xianyu: { prefix: 'xianyu', platform: 'xianyu', label: '咸鱼' },
 };
 const platformLogin = reactive({});
 const createTabs = ref([
   { key: 'pdd', platform: 'pdd', account: '', label: '拼多多' },
   { key: 'ali', platform: 'ali1688', account: '', label: '1688' },
   { key: 'taobao', platform: 'taobao', account: '', label: '淘宝' },
-  { key: 'xianyu', platform: 'xianyu', account: '', label: '闲鱼' },
+  { key: 'xianyu', platform: 'xianyu', account: '', label: '咸鱼' },
 ]);
 const createTab = ref('pdd');
 const createSearch = reactive({ keyword: '', loading: false, error: '' });

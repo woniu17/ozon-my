@@ -52,7 +52,7 @@ const missingSyncText = computed(() => {
   const phase = s.phase === 'pdd' ? '拼多多分页拉取'
     : s.phase === '1688' ? '1688 逐单补齐'
     : s.phase === 'taobao' ? '淘宝逐单补齐'
-    : s.phase === 'xianyu' ? '闲鱼逐单补齐'
+    : s.phase === 'xianyu' ? '咸鱼逐单补齐'
     : s.phase === 'backfill' ? '回填货源'
     : s.phase === 'done' ? '已完成' : '';
   const parts = [];
@@ -110,7 +110,7 @@ async function pollMissingSync() {
 
 async function doSyncMissingGoods() {
   if (missingSync.running) return;
-  if (!window.confirm('将重拉缺少商品ID的采购单(拼多多分页拉取 + 1688/淘宝/闲鱼逐单搜索),\n耗时较长(可能 10~60 分钟),完成后自动回填货源。是否继续?')) return;
+  if (!window.confirm('将重拉缺少商品ID的采购单(拼多多分页拉取 + 1688/淘宝/咸鱼逐单搜索),\n耗时较长(可能 10~60 分钟),完成后自动回填货源。是否继续?')) return;
   try {
     const r = await syncMissingGoods();
     const d = r?.data || r || {};
@@ -433,7 +433,7 @@ function fmtTime(t) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 function platformLabel(p) {
-  return { 1688: '1688', ali1688: '1688', pdd: '拼多多', yangkeduo: '拼多多', taobao: '淘宝', xianyu: '闲鱼' }[p] || p || '—';
+  return { 1688: '1688', ali1688: '1688', pdd: '拼多多', yangkeduo: '拼多多', taobao: '淘宝', xianyu: '咸鱼' }[p] || p || '—';
 }
 
 onMounted(async () => {
@@ -452,7 +452,7 @@ onBeforeUnmount(() => stopMissingSyncPoll());
       <div>
         <h2 class="page-title">货源管理</h2>
         <p class="page-desc">
-          维护 Ozon 商品的平台货源(1688 / 拼多多 / 淘宝 / 闲鱼)。采购单保存/补全时自动积累无歧义货源;多商品行订单只生成候选,需人工确认。
+          维护 Ozon 商品的平台货源(1688 / 拼多多 / 淘宝 / 咸鱼)。采购单保存/补全时自动积累无歧义货源;多商品行订单只生成候选,需人工确认。
         </p>
       </div>
       <div class="header-actions">
@@ -491,7 +491,7 @@ onBeforeUnmount(() => stopMissingSyncPoll());
           <option value="1688">1688</option>
           <option value="yangkeduo">拼多多</option>
           <option value="taobao">淘宝</option>
-          <option value="xianyu">闲鱼</option>
+          <option value="xianyu">咸鱼</option>
         </select>
         <input
           v-model="filter.keyword"
@@ -707,11 +707,11 @@ onBeforeUnmount(() => stopMissingSyncPoll());
         <div v-else-if="create.previewErr" class="form-err">{{ create.previewErr }}</div>
 
         <label class="form-row">
-          <span class="form-label">货源商品链接 / ID（1688 / 拼多多 / 淘宝 / 闲鱼） <b class="required">*</b></span>
+          <span class="form-label">货源商品链接 / ID（1688 / 拼多多 / 淘宝 / 咸鱼） <b class="required">*</b></span>
           <input
             v-model="create.sourceUrl"
             class="form-control"
-            placeholder="1688 / 拼多多 / 淘宝 / 闲鱼 商品链接，或直接填写商品ID"
+            placeholder="1688 / 拼多多 / 淘宝 / 咸鱼 商品链接，或直接填写商品ID"
           />
         </label>
         <label class="form-row">

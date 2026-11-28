@@ -67,7 +67,7 @@ export function parseSourceItemId(input) {
   return m ? m[1] : '';
 }
 
-// 支持维护货源的平台(2026-11-28:1688 + 拼多多 + 淘宝 + 闲鱼)
+// 支持维护货源的平台(2026-11-28:1688 + 拼多多 + 淘宝 + 咸鱼)
 export const SUPPORTED_SOURCE_PLATFORMS = new Set(['1688', 'yangkeduo', 'taobao', 'xianyu']);
 const SOURCE_PLATFORM_ALIASES = { ali1688: '1688', pdd: 'yangkeduo' };
 

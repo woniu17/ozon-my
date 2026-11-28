@@ -396,7 +396,7 @@
               <view class="po-goods-sub">{{ pi.spec ? pi.spec + ' · ' : '' }}¥{{ pi.price ?? '—' }} × {{ pi.number || pi.num || 1 }}</view>
             </view>
           </view>
-          <!-- 国内物流:当前单号/未录入 + 录入/修改入口(闲鱼等无物流接口平台,即时生效) -->
+          <!-- 国内物流:当前单号/未录入 + 录入/修改入口(咸鱼等无物流接口平台,即时生效) -->
           <view class="po-logi-row">
             <view v-if="g.poLogisticsNo" class="po-logi">
               <text class="po-logi-company">{{ g.poLogisticsCompany }}</text>
@@ -542,7 +542,7 @@ const PLATFORM_LABELS = {
   pdd: '拼多多',
   yangkeduo: '拼多多',
   taobao: '淘宝',
-  xianyu: '闲鱼',
+  xianyu: '咸鱼',
   other: '手工(其他)',
 };
 function platformLabel(p) {
@@ -625,7 +625,7 @@ function toggleRemove(g) {
 }
 
 // ════════════════════════════════════════════════════════════
-// 已有采购单手动录入/修改国内物流单号(2026-09-20,闲鱼等无物流接口平台)
+// 已有采购单手动录入/修改国内物流单号(2026-09-20,咸鱼等无物流接口平台)
 // 独立操作即时生效,不依赖底部「保存」;后端联动 wait_send→shipped
 // ════════════════════════════════════════════════════════════
 const LOGI_COMPANY_RANGE = ['(不填)', '顺丰速运', '中通快递', '圆通速递', '韵达快递', '申通快递', '极兔速递', '邮政快递包裹', '京东物流', '德邦物流', 'EMS'];
@@ -855,7 +855,7 @@ const PLATFORM_TAB_META = {
   pdd: { platformVal: 'yangkeduo', label: '拼多多' },
   ali1688: { platformVal: '1688', label: '1688' },
   taobao: { platformVal: 'taobao', label: '淘宝' },
-  xianyu: { platformVal: 'xianyu', label: '闲鱼' },
+  xianyu: { platformVal: 'xianyu', label: '咸鱼' },
 };
 
 const step = ref('manage'); // manage=采购管理(默认) | select=选平台订单
@@ -864,7 +864,7 @@ const platTabs = ref([
   { key: 'pdd', platform: 'pdd', account: 'linqx', label: '拼多多' },
   { key: 'ali:linqx', platform: 'ali1688', account: 'linqx', label: '1688·linqx' },
   { key: 'taobao', platform: 'taobao', account: 'linqx', label: '淘宝' },
-  { key: 'xianyu', platform: 'xianyu', account: 'linqx', label: '闲鱼' },
+  { key: 'xianyu', platform: 'xianyu', account: 'linqx', label: '咸鱼' },
 ]);
 const platLogin = reactive({}); // `${platform}:${account}` → 'yes'|'no'|'unknown'
 const stores = reactive({});    // tabKey → { orders, loading, error, tab, selected, searched }
@@ -891,7 +891,7 @@ const subTabs = computed(() => {
   if (p === 'pdd') {
     return [{ key: 'all', label: '全部' }, { key: 'unreceived', label: '待收货' }];
   }
-  // 闲鱼列表接口 orderStatus 仅支持全量,只留"全部"(与 web 端一致)
+  // 咸鱼列表接口 orderStatus 仅支持全量,只留"全部"(与 web 端一致)
   if (p === 'xianyu') return [{ key: 'all', label: '全部' }];
   return [{ key: 'all', label: '全部' }, { key: 'unshipped', label: '待发货' }, { key: 'unreceived', label: '待收货' }];
 });

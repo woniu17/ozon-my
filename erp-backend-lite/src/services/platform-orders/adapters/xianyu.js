@@ -1,4 +1,4 @@
-// 闲鱼订单适配器(2026-09-20,平台订单接入第四平台)
+// 咸鱼订单适配器(2026-09-20,平台订单接入第四平台)
 // 语义基准:docs/闲鱼采购订单API-调研文档.md(2026-09-20 在已登录页面实测)
 //
 // 接口语义(实测):
@@ -13,7 +13,7 @@
 //
 // 快递单号+物流轨迹(2026-11-01,在已登录页面实测):
 //  - mtop.cainiao.ld.detail.tradeid.ordercode.mailno.rescode.get.xy(菜鸟承运网关,共用 mtop 签名)
-//  - data={"tradeId":"<闲鱼订单号>"}(订单号超 JS 安全整数,必须字符串);type=originaljson,不带 valueType
+//  - data={"tradeId":"<咸鱼订单号>"}(订单号超 JS 安全整数,必须字符串);type=originaljson,不带 valueType
 //  - 响应 data.detailViewList[] 每元素一包裹:companyList[]={companyName,mailNo,...},
 //    detailList[] 为全量轨迹(时间升序);网页"物流记录"按钮是占位,轨迹数据直接走本接口
 //  - 搜索命中后回填 trackingNumber;getXianyuTrace 按订单号拉轨迹(对齐 getTaobaoTrace 口径)
@@ -108,10 +108,10 @@ async function callXianyuMtop(page, data, opts = {}) {
     const body = new URLSearchParams(form).toString();
     const r = await postFormInPage(page, `${XY_GATEWAY}${api}/1.0/`, body);
     if (r.status === 401 || r.status === 403) {
-      throw new ApiError(ErrorCode.AUTH_REQUIRED, '闲鱼登录态失效,请在 ERP 的 persistent 中登录 goofish.com 后重试');
+      throw new ApiError(ErrorCode.AUTH_REQUIRED, '咸鱼登录态失效,请在 ERP 的 persistent 中登录 goofish.com 后重试');
     }
     if (!r.ok) {
-      throw new ApiError('BROWSER_ERROR', `XY_HTTP_${r.status}: 闲鱼接口返回异常`, { status: 502 });
+      throw new ApiError('BROWSER_ERROR', `XY_HTTP_${r.status}: 咸鱼接口返回异常`, { status: 502 });
     }
     const json = r.json;
     if (!json || typeof json !== 'object') {
@@ -119,15 +119,15 @@ async function callXianyuMtop(page, data, opts = {}) {
     }
     const ret = (Array.isArray(json.ret) && json.ret[0]) || '';
     if (/^FAIL_SYS_SESSION_EXPIRED|^FAIL_SYS_USER_NOT_LOGIN|^SESSION_EXPIRED/.test(ret)) {
-      throw new ApiError(ErrorCode.AUTH_REQUIRED, '闲鱼登录已过期,请运行 ERP 的 persistent(headed)登录 goofish.com 后重试');
+      throw new ApiError(ErrorCode.AUTH_REQUIRED, '咸鱼登录已过期,请运行 ERP 的 persistent(headed)登录 goofish.com 后重试');
     }
     if (/^FAIL_SYS_TOKEN_EMPTY|^FAIL_SYS_ILLEGAL_ACCESS|^FAIL_SYS_TOKEN_EXOIRED/.test(ret)) {
       // token 失败/过期:服务器轮换 _m_h5_tk 后重取重签重试 1 次
-      lastErr = new ApiError(ErrorCode.AUTH_REQUIRED, `闲鱼 mtop token 失效(${ret}),重试仍失败请运行 ERP 的 persistent 打开闲鱼订单页一次后重试`);
+      lastErr = new ApiError(ErrorCode.AUTH_REQUIRED, `咸鱼 mtop token 失效(${ret}),重试仍失败请运行 ERP 的 persistent 打开咸鱼订单页一次后重试`);
       continue;
     }
     if (/^FAIL_SYS_USER_VALIDATE|^RGV587_ERROR/.test(ret)) {
-      throw new ApiError('RISK_VALIDATE', '闲鱼风控拦截,请运行 ERP 的 persistent 打开闲鱼订单页人工过验证后重试', { status: 409 });
+      throw new ApiError('RISK_VALIDATE', '咸鱼风控拦截,请运行 ERP 的 persistent 打开咸鱼订单页人工过验证后重试', { status: 409 });
     }
     if (!/^SUCCESS/.test(ret)) {
       throw new ApiError('BROWSER_ERROR', `XY_${ret || 'BAD_RESPONSE'}`, { status: 502 });
@@ -174,7 +174,7 @@ async function fetchXianyuTracking(page, orderSn) {
   };
 }
 
-/** 拉取闲鱼订单物流轨迹(对齐 getTaobaoTrace:按订单号查询,无需先有快递单号)
+/** 拉取咸鱼订单物流轨迹(对齐 getTaobaoTrace:按订单号查询,无需先有快递单号)
  *  返回 { steps: [{acceptTime, remark}](最新在前,与1688/PDD/淘宝一致), shippingName, trackingNumber }
  *  未发货/暂无轨迹返回空 steps(不抛错,由调用方推进 last_trace_at 防空转) */
 async function getXianyuTrace(orderSn, account) {
@@ -257,7 +257,7 @@ async function searchXianyuOrder(orderSn, accounts = []) {
     if (result) return { result: { ...result, account } };
   }
   if (errs.length) {
-    throw new ApiError(ErrorCode.AUTH_REQUIRED, `闲鱼全部账号搜索失败:\n${errs.join('\n')}`);
+    throw new ApiError(ErrorCode.AUTH_REQUIRED, `咸鱼全部账号搜索失败:\n${errs.join('\n')}`);
   }
   return { result: null };
 }
